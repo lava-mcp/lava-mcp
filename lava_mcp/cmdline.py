@@ -7,7 +7,6 @@ import sys
 from collections.abc import Sequence
 from typing import Literal, cast
 
-from .client import LavaClient
 from .config import Config
 from .server import build_server
 
@@ -56,13 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    try:
-        config = Config.from_env()
-    except ValueError:
-        if not args.url:
-            parser.error("LAVA URL required: pass --url or set $LAVA_URL")
-        config = Config(url=args.url)
-
+    config = Config.from_env()
     if args.url:
         config.url = args.url
     if args.token:
@@ -86,9 +79,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if config.transport not in ("stdio", "streamable-http"):
         parser.error(f"unsupported transport: {config.transport}")
+    if config.transport == "stdio" and not config.url:
+        parser.error(
+            "stdio mode needs --url or $LAVA_URL "
+            "(HTTP mode takes per-client X-Lava-Url/X-Lava-Token headers)"
+        )
 
-    client = LavaClient(config)
-    server = build_server(client)
+    server = build_server(config)
     server.run(transport=cast(Literal["stdio", "streamable-http"], config.transport))
     return 0
 

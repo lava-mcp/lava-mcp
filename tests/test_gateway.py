@@ -5,7 +5,6 @@ from pathlib import Path
 
 import yaml
 
-from lava_mcp.client import LavaClient
 from lava_mcp.config import Config
 from lava_mcp.gateway import SessionManager, generate_keypair
 from lava_mcp.jobs import build_interactive_job
@@ -67,7 +66,7 @@ def test_interactive_assets_match_contract() -> None:
 
 
 def _tool_names(cfg: Config) -> set[str]:
-    server = build_server(LavaClient(cfg))
+    server = build_server(cfg)
     return {t.name for t in asyncio.run(server.list_tools())}
 
 

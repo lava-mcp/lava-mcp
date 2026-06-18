@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from lava_mcp.client import LavaClient
 from lava_mcp.config import Config
 from lava_mcp.server import build_server
 
 
 def tool_names(read_only: bool) -> set[str]:
-    client = LavaClient(Config(url="https://lava.example.com", read_only=read_only))
-    server = build_server(client)
+    server = build_server(Config(url="https://lava.example.com", read_only=read_only))
     tools = asyncio.run(server.list_tools())
     return {t.name for t in tools}
 

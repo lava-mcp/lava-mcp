@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urljoin
 
@@ -13,6 +15,23 @@ from .config import Config
 
 class LavaError(RuntimeError):
     """Raised when a LAVA REST call fails."""
+
+
+def client_from(cfg: Config, headers: Mapping[str, str] | None = None) -> "LavaClient":
+    """Build a LavaClient for one request.
+
+    The connecting MCP client may supply its own LAVA target/credentials via
+    ``X-Lava-Url`` / ``X-Lava-Token`` headers (so it acts as its own LAVA user);
+    otherwise the server's configured defaults (env, for local stdio) are used.
+    """
+    url = (headers.get("x-lava-url") if headers else None) or cfg.url
+    token = (headers.get("x-lava-token") if headers else None) or cfg.token
+    if not url:
+        raise LavaError(
+            "No LAVA URL: send an 'X-Lava-Url' header (and 'X-Lava-Token'), "
+            "or set LAVA_URL for local use."
+        )
+    return LavaClient(replace(cfg, url=url, token=token))
 
 
 class LavaClient:

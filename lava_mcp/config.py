@@ -15,9 +15,15 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 @dataclass
 class Config:
-    """Connection + behaviour settings for the LAVA REST client and server."""
+    """Connection + behaviour settings for the LAVA REST client and server.
 
-    url: str
+    In hosted (HTTP) mode ``url``/``token`` are normally left empty and supplied
+    per request by the connecting client via ``X-Lava-Url`` / ``X-Lava-Token``
+    headers, so each agent/human acts as their own LAVA user. They are used as a
+    fallback for local stdio use.
+    """
+
+    url: str = ""
     token: str | None = None
     api_version: str = "v0.3"
     read_only: bool = False
@@ -41,9 +47,8 @@ class Config:
 
     @classmethod
     def from_env(cls) -> "Config":
-        url = os.environ.get("LAVA_URL")
-        if not url:
-            raise ValueError("LAVA_URL is required (e.g. https://lava.example.com)")
+        # url/token are optional: in hosted mode clients supply them via headers.
+        url = os.environ.get("LAVA_URL", "")
         gw_port = int(os.environ.get("LAVA_MCP_GATEWAY_PORT", "2222"))
         adv_port = os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_PORT")
         return cls(

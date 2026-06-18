@@ -3,8 +3,29 @@ from __future__ import annotations
 import pytest
 import responses
 
-from lava_mcp.client import LavaClient, LavaError
+from lava_mcp.client import LavaClient, LavaError, client_from
 from lava_mcp.config import Config
+
+
+def test_client_from_uses_request_headers() -> None:
+    cfg = Config(url="https://default.example.com", token="deftok")
+    c = client_from(
+        cfg, {"x-lava-url": "https://chosen.example.com", "x-lava-token": "htok"}
+    )
+    assert c.base.startswith("https://chosen.example.com/api/")
+    assert c.session.headers["Authorization"] == "Token htok"
+
+
+def test_client_from_falls_back_to_config() -> None:
+    cfg = Config(url="https://default.example.com", token="deftok")
+    c = client_from(cfg, None)
+    assert c.base.startswith("https://default.example.com/api/")
+
+
+def test_client_from_requires_a_url() -> None:
+    with pytest.raises(LavaError):
+        client_from(Config(url=""), {})
+
 
 BASE = "https://lava.example.com/api/v0.3/"
 

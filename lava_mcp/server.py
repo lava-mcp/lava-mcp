@@ -1,4 +1,9 @@
-"""Build the MCP server and register LAVA tools."""
+"""Build the MCP server and register LAVA tools.
+
+The LAVA target + token are resolved per request from the connecting client's
+``X-Lava-Url`` / ``X-Lava-Token`` headers (falling back to the server's env config
+for local stdio use), so each agent/human acts as their own LAVA user.
+"""
 
 from __future__ import annotations
 
@@ -9,21 +14,20 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import LavaClient
+from .client import LavaClient, client_from
+from .config import Config
 from .gateway import Gateway, GatewayError
 from .jobs import build_interactive_job
 
 
-def build_server(client: LavaClient) -> FastMCP:
+def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 
-    Read/observe tools are always registered. Write tools (submit, cancel,
-    resubmit, set priority) are only registered when the client is not in
-    read-only mode. Interactive board-session tools are registered when the SSH
+    Read/observe tools are always registered. Write tools are registered unless
+    ``read_only``. Interactive board-session tools are registered when the SSH
     gateway is enabled (hosted mode).
     """
-    cfg = client.config
-    gateway = Gateway(cfg) if cfg.gateway_enabled else None
+    gateway = Gateway(config) if config.gateway_enabled else None
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
@@ -35,18 +39,28 @@ def build_server(client: LavaClient) -> FastMCP:
             if gateway is not None:
                 await gateway.stop()
 
-    mcp = FastMCP("lava", host=cfg.host, port=cfg.port, lifespan=lifespan)
+    mcp = FastMCP("lava", host=config.host, port=config.port, lifespan=lifespan)
+
+    def client() -> LavaClient:
+        """Resolve the LAVA client for the current request (per-client creds)."""
+        request = None
+        try:
+            request = mcp.get_context().request_context.request
+        except (LookupError, AttributeError, ValueError):
+            request = None
+        headers = request.headers if request is not None else None
+        return client_from(config, headers)
 
     # -- system / identity -------------------------------------------------
     @mcp.tool()
     def whoami() -> Any:
-        """Return the LAVA user the configured token authenticates as."""
-        return client.whoami()
+        """Return the LAVA user your token authenticates as."""
+        return client().whoami()
 
     @mcp.tool()
     def version() -> Any:
         """Return the version of the connected LAVA server."""
-        return client.version()
+        return client().version()
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()
@@ -61,19 +75,19 @@ def build_server(client: LavaClient) -> FastMCP:
         Returns {count, results}. health is e.g. Good/Bad/Maintenance/Unknown;
         state is Idle/Reserved/Running.
         """
-        return client.list_devices(
+        return client().list_devices(
             limit=limit, device_type=device_type, health=health, state=state
         )
 
     @mcp.tool()
     def get_device(hostname: str) -> Any:
         """Get the full record for one device by hostname."""
-        return client.get_device(hostname)
+        return client().get_device(hostname)
 
     @mcp.tool()
     def get_device_dictionary(hostname: str) -> str:
         """Get a device's rendered configuration dictionary (Jinja2/YAML text)."""
-        return client.get_device_dictionary(hostname)
+        return client().get_device_dictionary(hostname)
 
     @mcp.tool()
     def get_qdl_info(hostname: str) -> Any:
@@ -83,17 +97,17 @@ def build_server(client: LavaClient) -> FastMCP:
         qdl, the qdl deploy/boot method parameters, and all available deploy/boot
         methods, derived from the device's rendered configuration.
         """
-        return client.get_qdl_info(hostname)
+        return client().get_qdl_info(hostname)
 
     @mcp.tool()
     def list_device_types(limit: int = 100) -> Any:
         """List the device types known to this LAVA instance."""
-        return client.list_device_types(limit=limit)
+        return client().list_device_types(limit=limit)
 
     @mcp.tool()
     def list_workers() -> Any:
         """List the dispatcher workers and their health/state."""
-        return client.list_workers()
+        return client().list_workers()
 
     # -- jobs --------------------------------------------------------------
     @mcp.tool()
@@ -109,7 +123,7 @@ def build_server(client: LavaClient) -> FastMCP:
         state is e.g. Submitted/Scheduling/Scheduled/Running/Canceling/Finished;
         health is Unknown/Complete/Incomplete/Canceled.
         """
-        return client.list_jobs(
+        return client().list_jobs(
             limit=limit,
             state=state,
             health=health,
@@ -120,87 +134,87 @@ def build_server(client: LavaClient) -> FastMCP:
     @mcp.tool()
     def get_job(job_id: int) -> Any:
         """Get the full record (state, health, device, times) for one job."""
-        return client.get_job(job_id)
+        return client().get_job(job_id)
 
     @mcp.tool()
     def get_job_definition(job_id: int) -> str:
         """Get the original submitted YAML job definition for a job."""
-        return client.get_job_definition(job_id)
+        return client().get_job_definition(job_id)
 
     @mcp.tool()
     def get_job_logs(
         job_id: int, start: int | None = None, end: int | None = None
     ) -> str:
         """Get a job's logs (YAML). Optionally limit to the [start, end) line range."""
-        return client.get_job_logs(job_id, start=start, end=end)
+        return client().get_job_logs(job_id, start=start, end=end)
 
     @mcp.tool()
     def get_job_results(job_id: int, limit: int = 200) -> Any:
         """Get a job's test-case results (pass/fail per case)."""
-        return client.get_job_results(job_id, limit=limit)
+        return client().get_job_results(job_id, limit=limit)
 
     # -- dashboards (v0.3) -------------------------------------------------
     @mcp.tool()
     def get_queue() -> Any:
         """Get the queue of submitted jobs waiting for a device."""
-        return client.dashboard_queue()
+        return client().dashboard_queue()
 
     @mcp.tool()
     def get_running() -> Any:
         """Get per-device-type running/reserved counts."""
-        return client.dashboard_running()
+        return client().dashboard_running()
 
     @mcp.tool()
     def get_lab_health() -> Any:
         """Get per-device health across the lab."""
-        return client.dashboard_lab_health()
+        return client().dashboard_lab_health()
 
     # -- validate (no mutation, always available) --------------------------
     @mcp.tool()
     def validate_job(definition: str) -> Any:
         """Validate a YAML job definition without submitting it."""
-        return client.validate_job(definition)
+        return client().validate_job(definition)
 
     # -- resources (read-only data the client can fetch by URI) ------------
     @mcp.resource("lava://devices")
     def devices_resource() -> Any:
         """The current device inventory."""
-        return client.list_devices(limit=500)
+        return client().list_devices(limit=500)
 
     @mcp.resource("lava://job/{job_id}/definition")
     def job_definition_resource(job_id: str) -> str:
         """The submitted YAML definition for a job."""
-        return client.get_job_definition(job_id)
+        return client().get_job_definition(job_id)
 
     @mcp.resource("lava://job/{job_id}/log")
     def job_log_resource(job_id: str) -> str:
         """The logs for a job (YAML)."""
-        return client.get_job_logs(job_id)
+        return client().get_job_logs(job_id)
 
-    if not client.config.read_only:
+    if not config.read_only:
 
         @mcp.tool()
         def submit_job(definition: str) -> Any:
             """Submit a YAML job definition. Returns the new job id(s)."""
-            return client.submit_job(definition)
+            return client().submit_job(definition)
 
         @mcp.tool()
         def cancel_job(job_id: int) -> Any:
             """Request cancellation of a running or queued job."""
-            return client.cancel_job(job_id)
+            return client().cancel_job(job_id)
 
         @mcp.tool()
         def resubmit_job(job_id: int) -> Any:
             """Resubmit a finished job with the same definition."""
-            return client.resubmit_job(job_id)
+            return client().resubmit_job(job_id)
 
         @mcp.tool()
         def set_job_priority(job_id: int, priority: int) -> Any:
             """Set a job's queue priority (0-100, higher runs sooner)."""
-            return client.set_job_priority(job_id, priority)
+            return client().set_job_priority(job_id, priority)
 
     # -- interactive board sessions (hosted gateway mode) ------------------
-    if gateway is not None and not cfg.read_only:
+    if gateway is not None and not config.read_only:
 
         @mcp.tool()
         async def open_board_session(
@@ -212,20 +226,21 @@ def build_server(client: LavaClient) -> FastMCP:
         ) -> Any:
             """Reserve a board and open an interactive container session on it.
 
-            Submits a LAVA job that runs a device-attached container which dials
-            back to this gateway over SSH. Waits up to wait_seconds for the
-            container to connect, then the session is usable via run_in_session.
+            Submits a LAVA job (as your LAVA user) that runs a device-attached
+            container which dials back to this gateway over SSH. Waits up to
+            wait_seconds for the container to connect, then the session is usable
+            via run_in_session.
             """
             session = gateway.manager.create(device_type=device_type)
             job_yaml = build_interactive_job(
-                cfg,
+                config,
                 session,
                 device_type=device_type,
                 tags=tags,
                 image=image,
                 timeout_minutes=timeout_minutes,
             )
-            result = client.submit_job(job_yaml)
+            result = client().submit_job(job_yaml)
             job_ids = result.get("job_ids") if isinstance(result, dict) else None
             session.job_id = job_ids[0] if job_ids else None
             connected = False
@@ -251,7 +266,7 @@ def build_server(client: LavaClient) -> FastMCP:
             session = gateway.manager.remove(session_id)
             if session is None:
                 return {"closed": False, "reason": "unknown session"}
-            cancel = client.cancel_job(session.job_id) if session.job_id else None
+            cancel = client().cancel_job(session.job_id) if session.job_id else None
             session.status = "closed"
             return {"closed": True, "job_id": session.job_id, "cancel": cancel}
 
