@@ -16,7 +16,7 @@ from mcp.server.fastmcp import FastMCP
 
 from .client import LavaClient, client_from
 from .config import Config
-from .gateway import Gateway, GatewayError
+from .gateway import Gateway
 from .jobs import build_interactive_job
 
 
@@ -31,8 +31,10 @@ def build_server(config: Config) -> FastMCP:
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        # Best-effort start; the gateway tools also call ensure_started() since
+        # the streamable-HTTP lifespan timing is not guaranteed.
         if gateway is not None:
-            await gateway.start()
+            await asyncio.to_thread(gateway.ensure_started)
         try:
             yield {}
         finally:
@@ -238,6 +240,7 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds for the container to connect, then the session is usable
             via run_in_session.
             """
+            await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.create(device_type=device_type)
             job_yaml = build_interactive_job(
                 config,
@@ -250,12 +253,9 @@ def build_server(config: Config) -> FastMCP:
             result = client().submit_job(job_yaml)
             job_ids = result.get("job_ids") if isinstance(result, dict) else None
             session.job_id = job_ids[0] if job_ids else None
-            connected = False
-            try:
-                await gateway.wait_connected(session.session_id, timeout=wait_seconds)
-                connected = True
-            except (asyncio.TimeoutError, GatewayError):
-                pass
+            connected = await gateway.wait_connected(
+                session.session_id, timeout=wait_seconds
+            )
             view = session.public_view()
             view["connected"] = connected
             return view
@@ -265,11 +265,13 @@ def build_server(config: Config) -> FastMCP:
             session_id: str, command: str, timeout: int = 120
         ) -> Any:
             """Run a shell command inside an open board session, returning output."""
+            await asyncio.to_thread(gateway.ensure_started)
             return await gateway.run(session_id, command, timeout=timeout)
 
         @mcp.tool()
         async def close_board_session(session_id: str) -> Any:
             """Close a board session and cancel its LAVA job (releases the board)."""
+            await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.remove(session_id)
             if session is None:
                 return {"closed": False, "reason": "unknown session"}
@@ -278,8 +280,9 @@ def build_server(config: Config) -> FastMCP:
             return {"closed": True, "job_id": session.job_id, "cancel": cancel}
 
         @mcp.tool()
-        def list_board_sessions() -> Any:
+        async def list_board_sessions() -> Any:
             """List the currently-open interactive board sessions."""
+            await asyncio.to_thread(gateway.ensure_started)
             return [s.public_view() for s in gateway.manager.list()]
 
     return mcp
