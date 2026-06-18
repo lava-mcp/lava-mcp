@@ -1,0 +1,39 @@
+#!/bin/sh
+# Open a reverse-SSH tunnel from this device-attached container to the lava-mcp
+# gateway. Run by the ssh-gateway.yaml LAVA test definition; the GATEWAY_* /
+# SESSION_* values come from the job's test parameters (exported as env vars).
+set -eu
+
+: "${GATEWAY_HOST:?missing GATEWAY_HOST}"
+: "${GATEWAY_PORT:?missing GATEWAY_PORT}"
+: "${SESSION_ID:?missing SESSION_ID}"
+: "${REVERSE_PORT:?missing REVERSE_PORT}"
+: "${SESSION_PRIVATE_KEY:?missing SESSION_PRIVATE_KEY}"
+: "${SESSION_PUBLIC_KEY:?missing SESSION_PUBLIC_KEY}"
+
+mkdir -p /root/.ssh
+chmod 700 /root/.ssh
+# The gateway connects back into this container using the same session key.
+printf '%s\n' "$SESSION_PUBLIC_KEY" >> /root/.ssh/authorized_keys
+printf '%s\n' "$SESSION_PRIVATE_KEY" > /root/.ssh/session_key
+chmod 600 /root/.ssh/authorized_keys /root/.ssh/session_key
+
+# Start this container's sshd (key auth for root is permitted by default).
+ssh-keygen -A >/dev/null
+mkdir -p /run/sshd
+/usr/sbin/sshd
+
+echo "lava-mcp: dialing gateway ${GATEWAY_HOST}:${GATEWAY_PORT} as ${SESSION_ID}" \
+     "(reverse ${REVERSE_PORT} -> localhost:22)"
+
+# Keep the tunnel up for the life of the job (autossh reconnects on drop).
+exec autossh -M 0 -N \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -i /root/.ssh/session_key \
+    -R "${REVERSE_PORT}:localhost:22" \
+    -p "${GATEWAY_PORT}" \
+    "${SESSION_ID}@${GATEWAY_HOST}"

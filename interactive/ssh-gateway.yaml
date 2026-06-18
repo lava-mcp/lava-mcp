@@ -1,0 +1,25 @@
+metadata:
+  name: interactive-ssh-gateway
+  format: "Lava-Test Test Definition 1.0"
+  description: >
+    Open a reverse-SSH tunnel from the device-attached container to the lava-mcp
+    gateway, so an agent/human can run commands against the board. The GATEWAY_*
+    and SESSION_* parameters are injected by lava-mcp when it submits the job.
+  maintainer:
+    - code@mattface.org
+  os:
+    - debian
+  scope:
+    - functional
+
+params:
+  GATEWAY_HOST: ""
+  GATEWAY_PORT: ""
+  SESSION_ID: ""
+  REVERSE_PORT: ""
+  SESSION_PRIVATE_KEY: ""
+  SESSION_PUBLIC_KEY: ""
+
+run:
+  steps:
+    - lava-gateway-connect

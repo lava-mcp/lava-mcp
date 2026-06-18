@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import yaml
 
@@ -41,12 +42,28 @@ def test_build_interactive_job_carries_session_params() -> None:
     )
     assert job["device_type"] == "qcs6490"
     assert job["tags"] == ["wifi"]
-    params = job["actions"][0]["test"]["definitions"][0]["parameters"]
+    test_action = job["actions"][0]["test"]
+    assert test_action["docker"]["image"] == cfg.interactive_image
+    definition = test_action["definitions"][0]
+    assert definition["repository"] == cfg.interactive_repo
+    assert definition["path"] == cfg.interactive_path
+    params = definition["parameters"]
     assert params["SESSION_ID"] == session.session_id
     assert params["REVERSE_PORT"] == str(session.reverse_port)
     assert params["GATEWAY_HOST"] == "gw.example.com"
     assert params["GATEWAY_PORT"] == "2222"
     assert params["SESSION_PUBLIC_KEY"] == session.public_key
+
+
+def test_interactive_assets_match_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    testdef = yaml.safe_load((root / "interactive" / "ssh-gateway.yaml").read_text())
+    assert testdef["metadata"]["format"] == "Lava-Test Test Definition 1.0"
+    assert testdef["run"]["steps"] == ["lava-gateway-connect"]
+    # the script the test definition runs exists in the image build context
+    assert (root / "interactive" / "lava-gateway-connect").exists()
+    # the default test-definition path points at the file we ship
+    assert Config(url="https://x").interactive_path == "interactive/ssh-gateway.yaml"
 
 
 def _tool_names(cfg: Config) -> set[str]:

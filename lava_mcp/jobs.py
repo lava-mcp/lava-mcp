@@ -19,11 +19,6 @@ import yaml
 from .config import Config
 from .gateway import BoardSession
 
-# Defaults; override via env (see Config / cmdline) once the LAVA-side assets exist.
-DEFAULT_IMAGE = "ghcr.io/lava-mcp/lava-interactive:latest"
-DEFAULT_REPO = "https://github.com/lava-mcp/lava-dispatcher-config.git"
-DEFAULT_PATH = "interactive/ssh-gateway.yaml"
-
 
 def build_interactive_job(
     config: Config,
@@ -60,12 +55,12 @@ def build_interactive_job(
             {
                 "test": {
                     "timeout": {"minutes": timeout_minutes},
-                    "docker": {"image": image or DEFAULT_IMAGE},
+                    "docker": {"image": image or config.interactive_image},
                     "definitions": [
                         {
-                            "repository": DEFAULT_REPO,
+                            "repository": config.interactive_repo,
                             "from": "git",
-                            "path": DEFAULT_PATH,
+                            "path": config.interactive_path,
                             "name": "interactive-ssh-gateway",
                             "parameters": parameters,
                         }

@@ -33,6 +33,11 @@ class Config:
     # host/port the in-job container should dial back to (advertised in jobs)
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
+    # interactive session assets (container image + test definition location).
+    # These MUST be set to wherever you host the lava-mcp image/repo.
+    interactive_image: str = "registry.example.com/lava-mcp-interactive:latest"
+    interactive_repo: str = "https://git.example.com/lava-mcp.git"
+    interactive_path: str = "interactive/ssh-gateway.yaml"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -55,4 +60,15 @@ class Config:
             gateway_port=gw_port,
             gateway_advertise_host=os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_HOST"),
             gateway_advertise_port=int(adv_port) if adv_port else None,
+            interactive_image=os.environ.get(
+                "LAVA_MCP_INTERACTIVE_IMAGE",
+                "registry.example.com/lava-mcp-interactive:latest",
+            ),
+            interactive_repo=os.environ.get(
+                "LAVA_MCP_INTERACTIVE_REPO",
+                "https://git.example.com/lava-mcp.git",
+            ),
+            interactive_path=os.environ.get(
+                "LAVA_MCP_INTERACTIVE_PATH", "interactive/ssh-gateway.yaml"
+            ),
         )
