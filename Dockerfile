@@ -4,7 +4,7 @@
 #           -e LAVA_URL=https://lava.example.com -e LAVA_TOKEN=... \
 #           -e LAVA_MCP_TRANSPORT=streamable-http -e LAVA_MCP_HOST=0.0.0.0 \
 #           lava-mcp
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 COPY pyproject.toml README.md ./

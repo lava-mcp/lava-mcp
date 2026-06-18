@@ -39,7 +39,14 @@ def build_server(config: Config) -> FastMCP:
             if gateway is not None:
                 await gateway.stop()
 
-    mcp = FastMCP("lava", host=config.host, port=config.port, lifespan=lifespan)
+    mcp = FastMCP(
+        "lava",
+        host=config.host,
+        port=config.port,
+        json_response=config.json_response,
+        stateless_http=config.stateless_http,
+        lifespan=lifespan,
+    )
 
     def client() -> LavaClient:
         """Resolve the LAVA client for the current request (per-client creds)."""

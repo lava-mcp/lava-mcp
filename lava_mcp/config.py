@@ -32,6 +32,10 @@ class Config:
     transport: str = "stdio"  # "stdio" | "streamable-http"
     host: str = "127.0.0.1"
     port: int = 8000
+    # HTTP transport: plain-JSON responses + stateless sessions are the most
+    # proxy- and multi-client-friendly for a hosted service.
+    json_response: bool = True
+    stateless_http: bool = True
     # interactive SSH gateway (only used in hosted mode)
     gateway_enabled: bool = False
     gateway_bind: str = "0.0.0.0"
@@ -60,6 +64,8 @@ class Config:
             transport=os.environ.get("LAVA_MCP_TRANSPORT", "stdio"),
             host=os.environ.get("LAVA_MCP_HOST", "127.0.0.1"),
             port=int(os.environ.get("LAVA_MCP_PORT", "8000")),
+            json_response=_env_bool("LAVA_MCP_JSON_RESPONSE", True),
+            stateless_http=_env_bool("LAVA_MCP_STATELESS", True),
             gateway_enabled=_env_bool("LAVA_MCP_GATEWAY_ENABLED"),
             gateway_bind=os.environ.get("LAVA_MCP_GATEWAY_BIND", "0.0.0.0"),
             gateway_port=gw_port,
