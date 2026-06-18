@@ -8,8 +8,6 @@ for local stdio use), so each agent/human acts as their own LAVA user.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -29,25 +27,18 @@ def build_server(config: Config) -> FastMCP:
     """
     gateway = Gateway(config) if config.gateway_enabled else None
 
-    @asynccontextmanager
-    async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
-        # Best-effort start; the gateway tools also call ensure_started() since
-        # the streamable-HTTP lifespan timing is not guaranteed.
-        if gateway is not None:
-            await asyncio.to_thread(gateway.ensure_started)
-        try:
-            yield {}
-        finally:
-            if gateway is not None:
-                await gateway.stop()
-
+    # NOTE: the gateway is a process-lifetime singleton running in its own thread.
+    # It is deliberately NOT started/stopped via the FastMCP lifespan: in stateful
+    # streamable-HTTP the lifespan tears down per session, which would stop the
+    # gateway's event loop while its listening socket stays open (handshakes then
+    # hang). The gateway tools call ensure_started(); the daemon thread exits with
+    # the process.
     mcp = FastMCP(
         "lava",
         host=config.host,
         port=config.port,
         json_response=config.json_response,
         stateless_http=config.stateless_http,
-        lifespan=lifespan,
     )
 
     def client() -> LavaClient:
