@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Sequence
+from typing import Literal, cast
 
 from .client import LavaClient
 from .config import Config
@@ -33,8 +34,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--transport",
         choices=("stdio", "streamable-http"),
-        default="stdio",
-        help="MCP transport (default: stdio).",
+        default=None,
+        help="MCP transport (default: stdio, or $LAVA_MCP_TRANSPORT).",
+    )
+    parser.add_argument("--host", default=None, help="HTTP bind host (hosted mode).")
+    parser.add_argument(
+        "--port", type=int, default=None, help="HTTP bind port (hosted mode)."
+    )
+    parser.add_argument(
+        "--gateway",
+        action="store_true",
+        help="Enable the interactive SSH board-session gateway (hosted mode).",
+    )
+    parser.add_argument(
+        "--gateway-port", type=int, default=None, help="SSH gateway listen port."
+    )
+    parser.add_argument(
+        "--gateway-advertise-host",
+        default=None,
+        help="Host the in-job container should dial back to (default: --host).",
     )
     args = parser.parse_args(argv)
 
@@ -53,10 +71,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.api_version = args.api_version
     if args.read_only:
         config.read_only = True
+    if args.transport:
+        config.transport = args.transport
+    if args.host:
+        config.host = args.host
+    if args.port:
+        config.port = args.port
+    if args.gateway:
+        config.gateway_enabled = True
+    if args.gateway_port:
+        config.gateway_port = args.gateway_port
+    if args.gateway_advertise_host:
+        config.gateway_advertise_host = args.gateway_advertise_host
+
+    if config.transport not in ("stdio", "streamable-http"):
+        parser.error(f"unsupported transport: {config.transport}")
 
     client = LavaClient(config)
     server = build_server(client)
-    server.run(transport=args.transport)
+    server.run(transport=cast(Literal["stdio", "streamable-http"], config.transport))
     return 0
 
 

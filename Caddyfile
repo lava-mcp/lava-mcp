@@ -1,0 +1,8 @@
+# Caddy fronts the lava-mcp HTTP transport with automatic HTTPS.
+# Set LAVA_MCP_DOMAIN in .env to a real hostname for Let's Encrypt certificates.
+{$LAVA_MCP_DOMAIN} {
+	reverse_proxy lava-mcp:8000 {
+		# MCP streamable-HTTP / SSE responses are streamed; flush immediately.
+		flush_interval -1
+	}
+}

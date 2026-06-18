@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from .client import LavaClient
+from .gateway import Gateway, GatewayError
+from .jobs import build_interactive_job
 
 
 def build_server(client: LavaClient) -> FastMCP:
@@ -14,9 +19,23 @@ def build_server(client: LavaClient) -> FastMCP:
 
     Read/observe tools are always registered. Write tools (submit, cancel,
     resubmit, set priority) are only registered when the client is not in
-    read-only mode.
+    read-only mode. Interactive board-session tools are registered when the SSH
+    gateway is enabled (hosted mode).
     """
-    mcp = FastMCP("lava")
+    cfg = client.config
+    gateway = Gateway(cfg) if cfg.gateway_enabled else None
+
+    @asynccontextmanager
+    async def lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+        if gateway is not None:
+            await gateway.start()
+        try:
+            yield {}
+        finally:
+            if gateway is not None:
+                await gateway.stop()
+
+    mcp = FastMCP("lava", host=cfg.host, port=cfg.port, lifespan=lifespan)
 
     # -- system / identity -------------------------------------------------
     @mcp.tool()
@@ -179,5 +198,66 @@ def build_server(client: LavaClient) -> FastMCP:
         def set_job_priority(job_id: int, priority: int) -> Any:
             """Set a job's queue priority (0-100, higher runs sooner)."""
             return client.set_job_priority(job_id, priority)
+
+    # -- interactive board sessions (hosted gateway mode) ------------------
+    if gateway is not None and not cfg.read_only:
+
+        @mcp.tool()
+        async def open_board_session(
+            device_type: str,
+            tags: list[str] | None = None,
+            image: str | None = None,
+            wait_seconds: int = 120,
+            timeout_minutes: int = 60,
+        ) -> Any:
+            """Reserve a board and open an interactive container session on it.
+
+            Submits a LAVA job that runs a device-attached container which dials
+            back to this gateway over SSH. Waits up to wait_seconds for the
+            container to connect, then the session is usable via run_in_session.
+            """
+            session = gateway.manager.create(device_type=device_type)
+            job_yaml = build_interactive_job(
+                cfg,
+                session,
+                device_type=device_type,
+                tags=tags,
+                image=image,
+                timeout_minutes=timeout_minutes,
+            )
+            result = client.submit_job(job_yaml)
+            job_ids = result.get("job_ids") if isinstance(result, dict) else None
+            session.job_id = job_ids[0] if job_ids else None
+            connected = False
+            try:
+                await gateway.wait_connected(session.session_id, timeout=wait_seconds)
+                connected = True
+            except (asyncio.TimeoutError, GatewayError):
+                pass
+            view = session.public_view()
+            view["connected"] = connected
+            return view
+
+        @mcp.tool()
+        async def run_in_session(
+            session_id: str, command: str, timeout: int = 120
+        ) -> Any:
+            """Run a shell command inside an open board session, returning output."""
+            return await gateway.run(session_id, command, timeout=timeout)
+
+        @mcp.tool()
+        async def close_board_session(session_id: str) -> Any:
+            """Close a board session and cancel its LAVA job (releases the board)."""
+            session = gateway.manager.remove(session_id)
+            if session is None:
+                return {"closed": False, "reason": "unknown session"}
+            cancel = client.cancel_job(session.job_id) if session.job_id else None
+            session.status = "closed"
+            return {"closed": True, "job_id": session.job_id, "cancel": cancel}
+
+        @mcp.tool()
+        def list_board_sessions() -> Any:
+            """List the currently-open interactive board sessions."""
+            return [s.public_view() for s in gateway.manager.list()]
 
     return mcp

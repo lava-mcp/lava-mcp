@@ -1,0 +1,47 @@
+# Hosted lava-mcp: the MCP server behind Caddy (automatic HTTPS), plus the SSH
+# board-session gateway exposed directly on TCP for in-job containers to dial into.
+#
+#   cp .env.example .env   # then edit
+#   docker compose up -d
+#
+# Agents connect to:  https://<LAVA_MCP_DOMAIN>/mcp
+# In-job containers dial the gateway at:  <LAVA_MCP_GATEWAY_HOST>:2222
+services:
+  lava-mcp:
+    build: .
+    restart: unless-stopped
+    environment:
+      LAVA_URL: ${LAVA_URL}
+      LAVA_TOKEN: ${LAVA_TOKEN}
+      LAVA_MCP_TRANSPORT: streamable-http
+      LAVA_MCP_HOST: 0.0.0.0
+      LAVA_MCP_PORT: "8000"
+      LAVA_MCP_GATEWAY_ENABLED: "true"
+      LAVA_MCP_GATEWAY_BIND: 0.0.0.0
+      LAVA_MCP_GATEWAY_PORT: "2222"
+      # host/IP that lab worker containers can reach to dial the SSH gateway
+      LAVA_MCP_GATEWAY_ADVERTISE_HOST: ${LAVA_MCP_GATEWAY_HOST}
+      LAVA_MCP_GATEWAY_ADVERTISE_PORT: "2222"
+    ports:
+      - "2222:2222"   # SSH gateway (TCP) — must be reachable by lab containers
+    expose:
+      - "8000"        # MCP HTTP — internal, fronted by Caddy
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - lava-mcp
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LAVA_MCP_DOMAIN: ${LAVA_MCP_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
