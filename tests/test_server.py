@@ -19,7 +19,7 @@ def test_read_tools_always_present() -> None:
 
 def test_write_tools_present_when_not_read_only() -> None:
     names = tool_names(read_only=False)
-    assert {"submit_job", "cancel_job", "resubmit_job", "set_job_priority"} <= names
+    assert {"submit_job", "cancel_job", "resubmit_job"} <= names
 
 
 def test_write_tools_absent_in_read_only() -> None:

@@ -28,7 +28,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--read-only",
         action="store_true",
-        help="Disable write tools (submit/cancel/resubmit/priority).",
+        help="Disable write tools (submit/cancel/resubmit).",
     )
     parser.add_argument(
         "--transport",

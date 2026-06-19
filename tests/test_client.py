@@ -88,9 +88,18 @@ def test_submit_job(client: LavaClient) -> None:
 
 
 @responses.activate
-def test_set_job_priority(client: LavaClient) -> None:
-    responses.post(BASE + "jobs/7/priority/", json={"id": 7, "priority": 90})
-    assert client.set_job_priority(7, 90)["priority"] == 90
+def test_cancel_job_uses_get(client: LavaClient) -> None:
+    # LAVA's cancel action is a GET; a POST returns HTTP 405.
+    responses.get(BASE + "jobs/7/cancel/", json={"message": "Job cancel signal sent."})
+    assert "cancel" in client.cancel_job(7)["message"].lower()
+    assert responses.calls[0].request.method == "GET"
+
+
+@responses.activate
+def test_resubmit_job_uses_post(client: LavaClient) -> None:
+    responses.post(BASE + "jobs/7/resubmit/", json={"message": "ok", "job_ids": [8]})
+    assert client.resubmit_job(7)["job_ids"] == [8]
+    assert responses.calls[0].request.method == "POST"
 
 
 @responses.activate

@@ -208,11 +208,6 @@ def build_server(config: Config) -> FastMCP:
             """Resubmit a finished job with the same definition."""
             return client().resubmit_job(job_id)
 
-        @mcp.tool()
-        def set_job_priority(job_id: int, priority: int) -> Any:
-            """Set a job's queue priority (0-100, higher runs sooner)."""
-            return client().set_job_priority(job_id, priority)
-
     # -- interactive board sessions (hosted gateway mode) ------------------
     if gateway is not None and not config.read_only:
 

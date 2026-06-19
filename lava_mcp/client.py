@@ -167,15 +167,11 @@ class LavaClient:
         return self._request("POST", "jobs/", json={"definition": definition}).json()
 
     def cancel_job(self, job_id: int | str) -> Any:
-        return _maybe_json(self._request("POST", f"jobs/{job_id}/cancel/"))
+        # LAVA's jobs/<id>/cancel/ action is a GET (no request body).
+        return _maybe_json(self._request("GET", f"jobs/{job_id}/cancel/"))
 
     def resubmit_job(self, job_id: int | str) -> Any:
         return _maybe_json(self._request("POST", f"jobs/{job_id}/resubmit/"))
-
-    def set_job_priority(self, job_id: int | str, priority: int) -> Any:
-        return self._request(
-            "POST", f"jobs/{job_id}/priority/", json={"priority": priority}
-        ).json()
 
 
 def _clean(params: dict[str, Any] | None) -> dict[str, Any] | None:

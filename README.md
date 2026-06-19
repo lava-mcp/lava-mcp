@@ -95,7 +95,7 @@ the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 | `LAVA_URL` | `--url` | LAVA base URL (stdio fallback; HTTP clients send `X-Lava-Url`) |
 | `LAVA_TOKEN` | `--token` | API token (stdio fallback; HTTP clients send `X-Lava-Token`) |
 | `LAVA_API_VERSION` | `--api-version` | REST version, default `v0.3` |
-| `LAVA_MCP_READ_ONLY` | `--read-only` | Hide write tools (submit/cancel/resubmit/priority) |
+| `LAVA_MCP_READ_ONLY` | `--read-only` | Hide write tools (submit/cancel/resubmit) |
 | `LAVA_MCP_TRANSPORT` | `--transport` | `stdio` (default) or `streamable-http` |
 | `LAVA_MCP_HOST` / `LAVA_MCP_PORT` | `--host` / `--port` | HTTP bind (hosted mode) |
 | `LAVA_MCP_GATEWAY_ENABLED` | `--gateway` | Enable interactive SSH board-session gateway |
@@ -109,8 +109,7 @@ Read/observe: `whoami`, `version`, `list_devices`, `get_device`,
 `get_job`, `get_job_definition`, `get_job_logs`, `get_job_results`, `get_queue`,
 `get_running`, `get_lab_health`, `validate_job`.
 
-Write (omitted with `--read-only`): `submit_job`, `cancel_job`, `resubmit_job`,
-`set_job_priority`.
+Write (omitted with `--read-only`): `submit_job`, `cancel_job`, `resubmit_job`.
 
 Interactive board sessions (hosted gateway mode): `open_board_session`,
 `run_in_session`, `close_board_session`, `list_board_sessions`.
