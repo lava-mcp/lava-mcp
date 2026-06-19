@@ -84,8 +84,9 @@ no inbound access to the worker is needed. Then:
   (e.g. `qdl`, `fastboot`, `adb`, shell).
 - `close_board_session(session_id)` cancels the job and frees the board.
 
-The container image + test definition live on the LAVA side (the
-`interactive-board-access` branch); the parameter contract is in `lava_mcp/jobs.py`.
+The container image + test definition live in this repo under `interactive/`
+(published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
+the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 
 ## Configuration
 
@@ -122,7 +123,7 @@ pytest
 
 ## Roadmap
 
-- The interactive **board sessions** gateway is implemented here; the matching LAVA
-  container image + test definition (which the in-job container runs) live on the
-  `interactive-board-access` branch of the LAVA repo and are still in progress.
+- The interactive **board sessions** gateway is implemented here, along with the
+  container image + test definition the in-job container runs (`interactive/`,
+  published to `ghcr.io/mattface/lava-mcp/interactive`).
 - Human shell proxy + interactive PTY through the gateway.

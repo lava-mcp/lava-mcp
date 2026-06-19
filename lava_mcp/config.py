@@ -45,9 +45,9 @@ class Config:
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
     # interactive session assets (container image + test definition location).
-    # These MUST be set to wherever you host the lava-mcp image/repo.
-    interactive_image: str = "registry.example.com/lava-mcp-interactive:latest"
-    interactive_repo: str = "https://git.example.com/lava-mcp.git"
+    # Override via LAVA_MCP_INTERACTIVE_* if you host the image/repo elsewhere.
+    interactive_image: str = "ghcr.io/mattface/lava-mcp/interactive:latest"
+    interactive_repo: str = "https://github.com/mattface/lava-mcp.git"
     interactive_path: str = "interactive/ssh-gateway.yaml"
 
     @classmethod
@@ -74,11 +74,11 @@ class Config:
             gateway_advertise_port=int(adv_port) if adv_port else None,
             interactive_image=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_IMAGE",
-                "registry.example.com/lava-mcp-interactive:latest",
+                "ghcr.io/mattface/lava-mcp/interactive:latest",
             ),
             interactive_repo=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_REPO",
-                "https://git.example.com/lava-mcp.git",
+                "https://github.com/mattface/lava-mcp.git",
             ),
             interactive_path=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_PATH", "interactive/ssh-gateway.yaml"

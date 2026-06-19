@@ -5,9 +5,9 @@
 # definition) starts sshd and opens a reverse-SSH tunnel out to the lava-mcp
 # gateway, so the gateway can run commands against the board (qdl/fastboot/adb/sh).
 #
-# Build & publish (use your own registry; set LAVA_MCP_INTERACTIVE_IMAGE to match):
-#   docker build -t registry.example.com/lava-mcp-interactive:latest interactive/
-#   docker push  registry.example.com/lava-mcp-interactive:latest
+# Build & publish (override LAVA_MCP_INTERACTIVE_IMAGE if you host it elsewhere):
+#   docker build -t ghcr.io/mattface/lava-mcp/interactive:latest interactive/
+#   docker push  ghcr.io/mattface/lava-mcp/interactive:latest
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
