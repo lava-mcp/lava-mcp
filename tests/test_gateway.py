@@ -58,7 +58,13 @@ def test_interactive_assets_match_contract() -> None:
     root = Path(__file__).resolve().parents[1]
     testdef = yaml.safe_load((root / "interactive" / "ssh-gateway.yaml").read_text())
     assert testdef["metadata"]["format"] == "Lava-Test Test Definition 1.0"
-    assert testdef["run"]["steps"] == ["lava-gateway-connect"]
+    steps = testdef["run"]["steps"]
+    # the script runs last; LAVA writes params as non-exported shell vars, so they
+    # must be exported first for the child script to inherit them
+    assert steps[-1] == "lava-gateway-connect"
+    export_step = next(s for s in steps if s.startswith("export "))
+    exported = set(export_step.removeprefix("export ").split())
+    assert set(testdef["params"]) <= exported
     # the script the test definition runs exists in the image build context
     assert (root / "interactive" / "lava-gateway-connect").exists()
     # the default test-definition path points at the file we ship

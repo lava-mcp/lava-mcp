@@ -4,10 +4,10 @@ The job grabs a board of the requested type and, in a docker test action, runs t
 interactive container image. That container dials back to this MCP server's SSH
 gateway (`ssh -R`) using the per-session key, so the gateway can run commands in it.
 
-The container image + test definition live on the LAVA side (see the project's
-``interactive-board-access`` branch); their parameter contract is the keys set in
-``parameters`` below. Image / definition repo / path are configurable so this stays
-decoupled from a specific deployment.
+The container image + test definition live in this repo under ``interactive/``
+(image published to GHCR, test def fetched from this repo by the lab worker); their
+parameter contract is the keys set in ``parameters`` below. Image / definition repo /
+path are configurable so this stays decoupled from a specific deployment.
 """
 
 from __future__ import annotations
