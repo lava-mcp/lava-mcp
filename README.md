@@ -15,11 +15,14 @@ pip install -e .[dev]
 
 ## Credentials
 
-The LAVA target + token are resolved **per request**:
+The LAVA **target** (`LAVA_URL`) is normally pinned to the instance a deployment
+fronts; the **token** is resolved per request:
 
-- **Hosted (HTTP) mode** — each connecting client sends its own
-  `X-Lava-Url` and `X-Lava-Token` headers, so every agent/human acts as their own
-  LAVA user. The server stores no LAVA credentials.
+- **Hosted (HTTP), pinned** — set `LAVA_URL` on the server to the LAVA instance it
+  serves. Each connecting client then sends only its own `X-Lava-Token` and acts as
+  its own LAVA user; no `X-Lava-Url` is needed. The server stores no per-user token.
+- **Hosted (HTTP), multi-tenant** — leave `LAVA_URL` unset; each client sends both
+  `X-Lava-Url` and `X-Lava-Token`, so one server can front many LAVA instances.
 - **Local (stdio) mode** — falls back to `LAVA_URL` / `LAVA_TOKEN` in the
   environment (single user).
 
@@ -44,14 +47,16 @@ Launch over stdio from your MCP client (`claude_desktop_config.json` / Claude Co
 }
 ```
 
-For a hosted server, point Claude Code at the HTTP endpoint and pass your LAVA
-credentials as headers:
+For a hosted server pinned to a LAVA instance, point Claude Code at the HTTP
+endpoint and pass only your token:
 
 ```sh
 claude mcp add --transport http lava https://mcp.example.com/mcp \
-  --header "X-Lava-Url: https://lava.example.com" \
   --header "X-Lava-Token: <your-api-token>"
 ```
+
+If the server is multi-tenant (no `LAVA_URL` set), also pass
+`--header "X-Lava-Url: https://lava.example.com"` to choose the instance.
 
 ## Run as a hosted service (HTTPS via Caddy)
 

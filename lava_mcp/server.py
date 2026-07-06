@@ -1,8 +1,10 @@
 """Build the MCP server and register LAVA tools.
 
-The LAVA target + token are resolved per request from the connecting client's
-``X-Lava-Url`` / ``X-Lava-Token`` headers (falling back to the server's env config
-for local stdio use), so each agent/human acts as their own LAVA user.
+The LAVA target is normally pinned server-side (``LAVA_URL``) to the instance the
+deployment fronts; connecting clients then send only their own ``X-Lava-Token`` to
+act as their own LAVA user. Left unpinned, the server is multi-tenant and clients
+also supply the target via ``X-Lava-Url``. Both fall back to the server's env
+config for local stdio use.
 """
 
 from __future__ import annotations

@@ -17,10 +17,11 @@ def _env_bool(name: str, default: bool = False) -> bool:
 class Config:
     """Connection + behaviour settings for the LAVA REST client and server.
 
-    In hosted (HTTP) mode ``url``/``token`` are normally left empty and supplied
-    per request by the connecting client via ``X-Lava-Url`` / ``X-Lava-Token``
-    headers, so each agent/human acts as their own LAVA user. They are used as a
-    fallback for local stdio use.
+    ``url`` normally pins the server to the LAVA instance it fronts (set
+    ``LAVA_URL`` per deployment); it is then authoritative and connecting clients
+    only send their own ``X-Lava-Token`` to act as their own LAVA user. Left
+    empty, the server is fully multi-tenant and clients supply the target via an
+    ``X-Lava-Url`` header. ``token`` is a fallback used for local stdio.
     """
 
     url: str = ""

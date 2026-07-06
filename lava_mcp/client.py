@@ -20,16 +20,21 @@ class LavaError(RuntimeError):
 def client_from(cfg: Config, headers: Mapping[str, str] | None = None) -> "LavaClient":
     """Build a LavaClient for one request.
 
-    The connecting MCP client may supply its own LAVA target/credentials via
-    ``X-Lava-Url`` / ``X-Lava-Token`` headers (so it acts as its own LAVA user);
-    otherwise the server's configured defaults (env, for local stdio) are used.
+    The LAVA *target* is normally pinned server-side: a deployment sets
+    ``LAVA_URL`` to the instance it fronts, so that URL is authoritative and
+    clients only send their own ``X-Lava-Token`` (acting as their own LAVA user).
+    Only when no ``LAVA_URL`` is configured (fully multi-tenant) does the client
+    supply the target via an ``X-Lava-Url`` header. The token likewise falls back
+    to the server's configured ``LAVA_TOKEN`` for local stdio use.
     """
-    url = (headers.get("x-lava-url") if headers else None) or cfg.url
-    token = (headers.get("x-lava-token") if headers else None) or cfg.token
+    header_url = headers.get("x-lava-url") if headers else None
+    header_token = headers.get("x-lava-token") if headers else None
+    url = cfg.url or header_url
+    token = header_token or cfg.token
     if not url:
         raise LavaError(
-            "No LAVA URL: send an 'X-Lava-Url' header (and 'X-Lava-Token'), "
-            "or set LAVA_URL for local use."
+            "No LAVA URL: set LAVA_URL on the server to pin it to a LAVA "
+            "instance, or send an 'X-Lava-Url' header (with 'X-Lava-Token')."
         )
     return LavaClient(replace(cfg, url=url, token=token))
 

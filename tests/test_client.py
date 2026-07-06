@@ -7,10 +7,22 @@ from lava_mcp.client import LavaClient, LavaError, client_from
 from lava_mcp.config import Config
 
 
-def test_client_from_uses_request_headers() -> None:
-    cfg = Config(url="https://default.example.com", token="deftok")
+def test_client_from_pins_configured_url_but_uses_client_token() -> None:
+    # A deployment pinned to a LAVA instance (LAVA_URL set) ignores any client
+    # X-Lava-Url, but still authenticates as the client via X-Lava-Token.
+    cfg = Config(url="https://pinned.example.com", token="deftok")
     c = client_from(
-        cfg, {"x-lava-url": "https://chosen.example.com", "x-lava-token": "htok"}
+        cfg, {"x-lava-url": "https://elsewhere.example.com", "x-lava-token": "htok"}
+    )
+    assert c.base.startswith("https://pinned.example.com/api/")
+    assert c.session.headers["Authorization"] == "Token htok"
+
+
+def test_client_from_uses_header_url_when_not_pinned() -> None:
+    # No LAVA_URL configured (fully multi-tenant): the client supplies the target.
+    c = client_from(
+        Config(url=""),
+        {"x-lava-url": "https://chosen.example.com", "x-lava-token": "htok"},
     )
     assert c.base.startswith("https://chosen.example.com/api/")
     assert c.session.headers["Authorization"] == "Token htok"

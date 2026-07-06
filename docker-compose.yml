@@ -11,8 +11,9 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      # No LAVA_URL/LAVA_TOKEN here: each connecting client supplies its own via
-      # X-Lava-Url / X-Lava-Token headers (multi-tenant).
+      # Pin this server to one LAVA instance; clients then only send X-Lava-Token.
+      # Leave LAVA_URL empty in .env to be multi-tenant (clients send X-Lava-Url too).
+      LAVA_URL: ${LAVA_URL:-}
       LAVA_MCP_TRANSPORT: streamable-http
       LAVA_MCP_HOST: 0.0.0.0
       LAVA_MCP_PORT: "8000"
