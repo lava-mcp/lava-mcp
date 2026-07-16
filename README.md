@@ -122,9 +122,10 @@ the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 Two optional allowlists gate the gateway (both default to open):
 
 - `LAVA_MCP_GATEWAY_ALLOW_IPS` — comma/space-separated IPs or CIDRs permitted to
-  connect to the SSH gateway on `:2222`. Connections from anywhere else are dropped
-  before authentication. Set this to your lab worker network so only in-job containers
-  can dial in.
+  connect to the SSH gateway on `:2222`. It applies to **every** connection — in-job
+  containers and (once human SSH access lands) people alike — dropped before
+  authentication. Set it to your lab worker network so only in-job containers can dial
+  in; to allow remote humans as well, add their source range (e.g. the VPN/office CIDR).
 - `LAVA_MCP_GATEWAY_ALLOW_USERS` — comma/space-separated LAVA usernames permitted to
   use the board-session tools. The server discovers the caller's identity from their
   token via the `whoami` API and rejects anyone off the list.
