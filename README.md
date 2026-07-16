@@ -204,6 +204,66 @@ sequenceDiagram
 Human keys are per-session and revoked on `close_board_session`; the whole path sits
 behind a `LAVA_MCP_GATEWAY_HUMAN_ENABLED` flag.
 
+### Direct serial console via ser2net (planned)
+
+> **Not yet implemented** — design only. The tool, signal, and flag below don't exist
+> yet; tracked on the [roadmap](#roadmap).
+
+Where the SSH shell above gives you the board's *userspace* (it needs a booted,
+networked board), a **serial console** is the board's actual UART — it shows boot,
+kernel and panic logs, works with no DUT networking, and hands you the login prompt
+itself. Many LAVA labs already front the board's UART with
+[ser2net](https://github.com/cminyard/ser2net) — the device dictionary's
+`connection_command` is typically `telnet <ser2net-host> <port>`, and LAVA drives boot
+over that same console. This path lets a human attach to it.
+
+The catch is not to fight LAVA for the console while it is driving boot. So the
+interactive test definition boots the board and, on reaching a known shell prompt,
+emits a LAVA signal (a `console-ready` lava-test-case). lava-mcp waits for that flag
+before exposing the console:
+
+1. Human opens a session; lava-mcp submits a boot-to-shell job that emits
+   `console-ready`.
+2. lava-mcp watches the job's signals/results and exposes nothing during boot.
+3. Once flagged, a new `get_serial_console(session_id)` tool returns a connect command.
+   Remote humans are bridged through the existing gateway (the ser2net TCP port is
+   reverse-forwarded out, the same `ssh -R` mechanism); in-lab humans get the
+   `telnet <host> <port>` directly.
+4. Human attaches to the **live raw UART** — kernel logs, login prompt, the lot.
+5. `close_board_session` ends the job; LAVA reclaims the console and releases the board.
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant MCP as lava-mcp + gateway
+    participant LAVA as LAVA (dispatcher<br/>drives the console)
+    participant Ser2net as ser2net → board UART
+
+    Human->>MCP: open_board_session(device_type)
+    MCP->>LAVA: submit boot-to-shell job<br/>(emit console-ready on prompt)
+    LAVA->>Ser2net: drive boot over the serial console
+    Note over LAVA,Ser2net: watch for the shell prompt
+    LAVA-->>MCP: signal "booted to shell" (console-ready)
+
+    Human->>MCP: get_serial_console(session_id)
+    Note over MCP: bridge ser2net's TCP port out<br/>via the gateway (ssh -R)
+    MCP-->>Human: connect command (telnet/nc through gateway)
+
+    Human->>Ser2net: attach to the raw UART (via gateway)
+    loop live serial console
+        Human->>Ser2net: keystrokes
+        Ser2net-->>Human: boot/kernel logs + shell output
+    end
+
+    Human->>MCP: close_board_session(session_id)
+    MCP->>LAVA: cancel job — LAVA reclaims console, releases board
+```
+
+**Console handoff** is the one wrinkle: either ser2net is configured for multiple
+connections (the human shares the console LAVA already holds), or the job idles after
+boot — reservation held, console released — and the human takes it over. Gated behind a
+`LAVA_MCP_SERIAL_CONSOLE_ENABLED` flag.
+
 ## Configuration
 
 | Env var | CLI flag | Meaning |
@@ -241,4 +301,6 @@ pytest
 - The interactive **board sessions** gateway is implemented here, along with the
   container image + test definition the in-job container runs (`interactive/`,
   published to `ghcr.io/mattface/lava-mcp/interactive`).
-- Human shell proxy + interactive PTY through the gateway.
+- Human shell proxy + interactive PTY through the gateway (design above).
+- Direct serial console for humans via ser2net, gated on a `console-ready` job signal
+  (design above).
