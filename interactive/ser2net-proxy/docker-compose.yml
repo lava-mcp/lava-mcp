@@ -1,0 +1,30 @@
+# First-cut LAVA Test Services proxy for the serial console.
+#
+# LAVA runs this docker-compose project on the worker (in the lab) for the lifetime of
+# the job, via the `services:` directive in a test action. `network_mode: host` puts it
+# in the worker's network namespace, so it resolves and reaches the lab console server
+# exactly as the LAVA dispatcher does.
+#
+# This first version only proves that (a) the Test Services container starts on the
+# worker and (b) it can reach the board's ser2net console endpoint
+# (`telnet ser2net 7095`, taken from the device dictionary's connection_command). The
+# dial-out reverse-forward that brings the console out to the lava-mcp gateway is the
+# next step and will replace the probe loop below.
+services:
+  ser2net-proxy:
+    image: alpine:3.20
+    network_mode: host
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache netcat-openbsd >/dev/null 2>&1 || true
+        echo "ser2net-proxy: probing ser2net:7095 (console for qcs615-adp-air-04)"
+        while true; do
+          if nc -z -w2 ser2net 7095; then
+            echo "ser2net-proxy: ser2net:7095 reachable"
+          else
+            echo "ser2net-proxy: ser2net:7095 UNREACHABLE"
+          fi
+          sleep 15
+        done

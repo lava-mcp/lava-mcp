@@ -1,0 +1,104 @@
+# lava-mcp serial-console test job for qcs615-adp-air-04 (device-type qcs615-ride).
+#
+# Based on health-check job 4916, trimmed to a single qdl deploy + boot to a shell,
+# then two test actions:
+#   1. a Test Services container (interactive/ser2net-proxy) started on the worker;
+#   2. an inline test that emits the `console-ready` signal and holds the reservation.
+#
+# The device dict for qcs615-adp-air-04 has `allow_test_services: true`, which LAVA
+# requires for the services container. Submit with:
+#   lavacli jobs submit test-job-qcs615.yaml     (or the web "Submit" form)
+device_type: qcs615-ride
+job_name: lava-mcp serial-console test (console-ready + services)
+priority: medium
+visibility: public
+
+timeouts:
+  job:
+    minutes: 70
+  action:
+    minutes: 20
+  connection:
+    minutes: 8
+
+context:
+  lava_test_results_dir: /home/lava-%s
+  test_character_delay: 10
+
+actions:
+- deploy:
+    rootfs_image: "core-image-base-qcs615-ride/rootfs.img"
+    socflash:
+      headers:
+        Authorization: LAVA_BASIC_AUTH
+      url: 'https://s.lava.infra.foundries.io/qcs615-adp-air/core-image-base-qcs615-ride.rootfs.socflash.tar.gz'
+      apply-overlay: true
+    timeout:
+      minutes: 20
+    to: qdl
+    namespace: qdl
+
+- boot:
+    firehose_program: "prog_firehose_ddr.elf"
+    rawprogram: "rawprogram0.xml rawprogram1.xml rawprogram2.xml rawprogram3.xml rawprogram4.xml"
+    patch: "patch0.xml patch1.xml patch2.xml patch3.xml patch4.xml"
+    path: "core-image-base-qcs615-ride"
+    storage: "ufs"
+    debug: true
+    timeout:
+      minutes: 15
+    method: qdl
+    namespace: qdl
+
+- command:
+    name: network_turn_on
+    namespace: qdl
+
+- boot:
+    auto_login:
+      login_prompt: 'login:'
+      username: root
+    prompts:
+    - root@qcs615-ride
+    - root@(.*):[/~]#
+    timeout:
+      minutes: 2
+    method: minimal
+    namespace: qdl
+
+# Start the ser2net console proxy as a LAVA Test Services container on the worker.
+# Needs `allow_test_services: true` in the device dict (set on qcs615-adp-air-04).
+- test:
+    namespace: qdl
+    timeout:
+      minutes: 60
+    services:
+    - name: ser2net-proxy
+      from: git
+      repository: https://github.com/mattface/lava-mcp.git
+      path: interactive/ser2net-proxy/docker-compose.yml
+
+# Signal that the board has booted to a shell, then hold the reservation (with periodic
+# output so the connection does not idle out) so the console stays available.
+- test:
+    namespace: qdl
+    connection-namespace: qdl
+    timeout:
+      minutes: 50
+    definitions:
+    - from: inline
+      name: console-ready
+      path: inline/console-ready.yaml
+      repository:
+        metadata:
+          format: Lava-Test Test Definition 1.0
+          name: console-ready
+          description: Emit console-ready once the board is at a shell, then hold.
+        run:
+          steps:
+          - lava-test-case console-ready --result pass
+          - 'for i in $(seq 1 80); do echo "console-hold tick $i"; sleep 30; done'
+
+- command:
+    name: stop_test_services
+    namespace: qdl
