@@ -1,44 +1,32 @@
-# First-cut LAVA Test Services proxy for the serial console.
+# ser2net console proxy as a LAVA Test Services container (external-network variant).
 #
-# LAVA runs this docker-compose project on the worker (in the lab) for the lifetime of
-# the job, via the `services:` directive in a test action.
+# Started at the beginning of the job so a user can watch the board's console during
+# deploy and boot. It relays the console read-only and only enables user writes once it
+# sees the console-ready sentinel in the stream (emitted by the job's console-ready test
+# after the board boots to a shell) — so it never writes to the console while LAVA is
+# driving the boot. See console-proxy.py.
 #
-# The board's console server (`telnet ser2net 7095`, from the device dict's
-# connection_command) is a *container* on the worker's Docker network, not a host DNS
-# name — the dispatcher resolves `ser2net` through Docker's embedded DNS because it
-# shares that network. So this proxy joins the same external network
-# (`lava-dispatcher_default`) rather than using host networking (host networking can't
-# resolve the Docker-DNS name — "Name does not resolve").
-#
-# This first version only proves the container starts and can reach the console
-# endpoint. The dial-out reverse-forward that brings the console out to the lava-mcp
-# gateway replaces the probe loop below.
+# The console server (`telnet ser2net 7095`) is a container on the worker's Docker
+# network, so this proxy joins that external network (Docker DNS resolves `ser2net`).
+# Host-networking variant: docker-compose.host.yml.
 #
 # Overridable via the job/device `environment` (LAVA writes it to the compose .env):
-#   SER2NET_NETWORK  external Docker network the ser2net container is on
-#   SER2NET_HOST     console server hostname on that network
-#   SER2NET_PORT     console server port
+#   SER2NET_NETWORK         external Docker network the console server is on
+#   SER2NET_HOST/PORT       console endpoint
+#   CONSOLE_LISTEN_PORT     port watchers connect to
+#   CONSOLE_READY_SENTINEL  string that unlocks writes (match the job's echo)
 services:
   ser2net-proxy:
-    image: alpine:3.20
+    image: python:3.12-alpine
     networks: [lab]
+    volumes:
+      - ./console-proxy.py:/console-proxy.py:ro
     environment:
       SER2NET_HOST: ${SER2NET_HOST:-ser2net}
       SER2NET_PORT: ${SER2NET_PORT:-7095}
-    command:
-      - sh
-      - -c
-      - |
-        apk add --no-cache netcat-openbsd >/dev/null 2>&1 || true
-        echo "ser2net-proxy: probing $$SER2NET_HOST:$$SER2NET_PORT on network lab"
-        while true; do
-          if nc -z -w2 "$$SER2NET_HOST" "$$SER2NET_PORT"; then
-            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT reachable"
-          else
-            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT UNREACHABLE"
-          fi
-          sleep 15
-        done
+      CONSOLE_LISTEN_PORT: ${CONSOLE_LISTEN_PORT:-2323}
+      CONSOLE_READY_SENTINEL: ${CONSOLE_READY_SENTINEL:-LAVA_MCP_CONSOLE_WRITABLE}
+    command: ["python3", "/console-proxy.py"]
 
 networks:
   lab:

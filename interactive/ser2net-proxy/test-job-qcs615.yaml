@@ -1,15 +1,14 @@
 # lava-mcp serial-console test job for qcs615-adp-air-04 (device-type qcs615-ride).
 #
-# Based on health-check job 4916, trimmed to a single qdl deploy + boot to a shell,
-# then two test actions:
-#   1. a Test Services container (interactive/ser2net-proxy) started on the worker;
-#   2. an inline test that emits the `console-ready` signal and holds the reservation.
+# Based on health-check job 4916, trimmed to a single qdl deploy + boot to a shell.
+# The ser2net console proxy is started as a Test Services container at the *beginning*
+# of the job, so a user can watch the console during deploy and boot. The proxy relays
+# read-only until the console-ready test (after boot) echoes the sentinel, then allows
+# writes. The device dict for qcs615-adp-air-04 has `allow_test_services: true`.
 #
-# The device dict for qcs615-adp-air-04 has `allow_test_services: true`, which LAVA
-# requires for the services container. Submit with:
-#   lavacli jobs submit test-job-qcs615.yaml     (or the web "Submit" form)
+# Submit with: lavacli jobs submit test-job-qcs615.yaml  (or the web "Submit" form)
 device_type: qcs615-ride
-job_name: lava-mcp serial-console test (console-ready + services)
+job_name: lava-mcp serial-console test (watch-from-start + console-ready)
 priority: medium
 visibility: public
 
@@ -26,15 +25,31 @@ context:
   test_character_delay: 10
 
 # Config for the ser2net-proxy Test Services container. LAVA writes these into the
-# compose .env (merged with the device's environment), so they override the compose
-# defaults. SER2NET_NETWORK is the external Docker network the console server sits on
-# (used by docker-compose.yml); it is ignored by the host-networking variant.
+# compose .env (merged with the device's environment), overriding the compose defaults.
+# SER2NET_NETWORK is the external Docker network the console server sits on (used by
+# docker-compose.yml; ignored by the host-networking variant). CONSOLE_READY_SENTINEL
+# must match the string echoed by the console-ready test below.
 environment:
   SER2NET_NETWORK: lava-dispatcher_default
   SER2NET_HOST: ser2net
   SER2NET_PORT: "7095"
+  CONSOLE_READY_SENTINEL: LAVA_MCP_CONSOLE_WRITABLE
 
 actions:
+# Start the console proxy first, before deploy/boot, so it can watch the console from
+# the very start of the job. It stays read-only until console-ready (see below).
+# path selects the network mode: docker-compose.yml joins the external Docker network
+# named by SER2NET_NETWORK (default); docker-compose.host.yml uses host networking.
+- test:
+    namespace: console
+    timeout:
+      minutes: 70
+    services:
+    - name: ser2net-proxy
+      from: git
+      repository: https://github.com/mattface/lava-mcp.git
+      path: interactive/ser2net-proxy/docker-compose.yml
+
 - deploy:
     rootfs_image: "core-image-base-qcs615-ride/rootfs.img"
     socflash:
@@ -75,22 +90,10 @@ actions:
     method: minimal
     namespace: qdl
 
-# Start the ser2net console proxy as a LAVA Test Services container on the worker.
-# Needs `allow_test_services: true` in the device dict (set on qcs615-adp-air-04).
-# path selects the network mode: docker-compose.yml joins the external Docker network
-# named by SER2NET_NETWORK (default); docker-compose.host.yml uses host networking.
-- test:
-    namespace: qdl
-    timeout:
-      minutes: 60
-    services:
-    - name: ser2net-proxy
-      from: git
-      repository: https://github.com/mattface/lava-mcp.git
-      path: interactive/ser2net-proxy/docker-compose.yml
-
-# Signal that the board has booted to a shell, then hold the reservation (with periodic
-# output so the connection does not idle out) so the console stays available.
+# Board is now at a shell. Signal console-ready and echo the sentinel to the console
+# (this line goes to the UART, where the proxy sees it and enables user writes). Then
+# hold the reservation (with periodic output so the connection does not idle out).
+# The echoed string must match CONSOLE_READY_SENTINEL above.
 - test:
     namespace: qdl
     connection-namespace: qdl
@@ -104,12 +107,13 @@ actions:
         metadata:
           format: Lava-Test Test Definition 1.0
           name: console-ready
-          description: Emit console-ready once the board is at a shell, then hold.
+          description: Emit console-ready, unlock the proxy, then hold.
         run:
           steps:
           - lava-test-case console-ready --result pass
+          - echo "LAVA_MCP_CONSOLE_WRITABLE"
           - 'for i in $(seq 1 80); do echo "console-hold tick $i"; sleep 30; done'
 
 - command:
     name: stop_test_services
-    namespace: qdl
+    namespace: console
