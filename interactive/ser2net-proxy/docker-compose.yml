@@ -1,30 +1,46 @@
 # First-cut LAVA Test Services proxy for the serial console.
 #
 # LAVA runs this docker-compose project on the worker (in the lab) for the lifetime of
-# the job, via the `services:` directive in a test action. `network_mode: host` puts it
-# in the worker's network namespace, so it resolves and reaches the lab console server
-# exactly as the LAVA dispatcher does.
+# the job, via the `services:` directive in a test action.
 #
-# This first version only proves that (a) the Test Services container starts on the
-# worker and (b) it can reach the board's ser2net console endpoint
-# (`telnet ser2net 7095`, taken from the device dictionary's connection_command). The
-# dial-out reverse-forward that brings the console out to the lava-mcp gateway is the
-# next step and will replace the probe loop below.
+# The board's console server (`telnet ser2net 7095`, from the device dict's
+# connection_command) is a *container* on the worker's Docker network, not a host DNS
+# name — the dispatcher resolves `ser2net` through Docker's embedded DNS because it
+# shares that network. So this proxy joins the same external network
+# (`lava-dispatcher_default`) rather than using host networking (host networking can't
+# resolve the Docker-DNS name — "Name does not resolve").
+#
+# This first version only proves the container starts and can reach the console
+# endpoint. The dial-out reverse-forward that brings the console out to the lava-mcp
+# gateway replaces the probe loop below.
+#
+# Overridable via the job/device `environment` (LAVA writes it to the compose .env):
+#   SER2NET_NETWORK  external Docker network the ser2net container is on
+#   SER2NET_HOST     console server hostname on that network
+#   SER2NET_PORT     console server port
 services:
   ser2net-proxy:
     image: alpine:3.20
-    network_mode: host
+    networks: [lab]
+    environment:
+      SER2NET_HOST: ${SER2NET_HOST:-ser2net}
+      SER2NET_PORT: ${SER2NET_PORT:-7095}
     command:
       - sh
       - -c
       - |
         apk add --no-cache netcat-openbsd >/dev/null 2>&1 || true
-        echo "ser2net-proxy: probing ser2net:7095 (console for qcs615-adp-air-04)"
+        echo "ser2net-proxy: probing $$SER2NET_HOST:$$SER2NET_PORT on network lab"
         while true; do
-          if nc -z -w2 ser2net 7095; then
-            echo "ser2net-proxy: ser2net:7095 reachable"
+          if nc -z -w2 "$$SER2NET_HOST" "$$SER2NET_PORT"; then
+            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT reachable"
           else
-            echo "ser2net-proxy: ser2net:7095 UNREACHABLE"
+            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT UNREACHABLE"
           fi
           sleep 15
         done
+
+networks:
+  lab:
+    external: true
+    name: ${SER2NET_NETWORK:-lava-dispatcher_default}
