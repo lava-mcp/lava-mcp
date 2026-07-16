@@ -119,6 +119,16 @@ The container image + test definition live in this repo under `interactive/`
 (published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
 the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 
+Two optional allowlists gate the gateway (both default to open):
+
+- `LAVA_MCP_GATEWAY_ALLOW_IPS` — comma/space-separated IPs or CIDRs permitted to
+  connect to the SSH gateway on `:2222`. Connections from anywhere else are dropped
+  before authentication. Set this to your lab worker network so only in-job containers
+  can dial in.
+- `LAVA_MCP_GATEWAY_ALLOW_USERS` — comma/space-separated LAVA usernames permitted to
+  use the board-session tools. The server discovers the caller's identity from their
+  token via the `whoami` API and rejects anyone off the list.
+
 ### For humans (without an agent)
 
 The gateway has no dedicated human client — but the board-session tools are just MCP
@@ -277,6 +287,8 @@ boot — reservation held, console released — and the human takes it over. Gat
 | `LAVA_MCP_GATEWAY_ENABLED` | `--gateway` | Enable interactive SSH board-session gateway |
 | `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | SSH gateway port (default 2222) |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
+| `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
+| `LAVA_MCP_GATEWAY_ALLOW_USERS` | `--gateway-allow-user` | LAVA usernames allowed to open board sessions (empty = all) |
 
 ## Tools (v1)
 

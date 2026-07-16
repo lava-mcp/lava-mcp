@@ -19,10 +19,12 @@ gets torn down when that task ends). Cross-loop calls go through
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import socket
 import threading
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,9 +32,31 @@ import asyncssh
 
 from .config import Config
 
+_Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
 
 class GatewayError(RuntimeError):
     """Raised for interactive-session/gateway failures."""
+
+
+def parse_networks(entries: Iterable[str]) -> list[_Network]:
+    """Parse IP/CIDR allowlist entries into networks (a bare IP becomes a /32 or /128)."""
+    return [ipaddress.ip_network(e, strict=False) for e in entries if e]
+
+
+def ip_allowed(ip: str, networks: list[_Network]) -> bool:
+    """True if ``ip`` falls in any allowlisted network. Empty allowlist = allow all."""
+    if not networks:
+        return True
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    # a v4 client on a dual-stack listener shows up as ::ffff:a.b.c.d
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
+    return any(addr in net for net in networks)
 
 
 def generate_keypair() -> tuple[str, str]:
@@ -109,9 +133,21 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     """Per-connection SSH server: authenticates a session key and accepts its
     reverse port-forward request."""
 
-    def __init__(self, manager: SessionManager) -> None:
+    def __init__(
+        self, manager: SessionManager, allow_networks: list[_Network] | None = None
+    ) -> None:
         self._manager = manager
         self._username: str | None = None
+        self._allow_networks = allow_networks or []
+        self._allowed = True
+
+    def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
+        peer = conn.get_extra_info("peername")
+        ip = peer[0] if peer else ""
+        self._allowed = ip_allowed(ip, self._allow_networks)
+        if not self._allowed:
+            # drop connections from outside the gateway IP allowlist before auth
+            conn.close()
 
     def begin_auth(self, username: str) -> bool:
         self._username = username
@@ -121,6 +157,8 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         return True
 
     def validate_public_key(self, username: str, key: asyncssh.SSHKey) -> bool:
+        if not self._allowed:
+            return False
         session = self._manager.get(username)
         if session is None:
             return False
@@ -133,6 +171,8 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     def server_requested(self, listen_host: str, listen_port: int) -> bool:
         # Container requests `ssh -R <reverse_port>:localhost:22`. Only accept the
         # port we pre-allocated for this authenticated session.
+        if not self._allowed:
+            return False
         session = self._manager.get(self._username or "")
         if session is None or listen_port != session.reverse_port:
             return False
@@ -148,6 +188,7 @@ class Gateway:
     def __init__(self, config: Config, manager: SessionManager | None = None) -> None:
         self.config = config
         self.manager = manager or SessionManager()
+        self._allow_networks = parse_networks(config.gateway_allow_ips)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._server: asyncssh.SSHAcceptor | None = None
@@ -186,7 +227,7 @@ class Gateway:
     async def _start_server(self) -> None:
         host_key = asyncssh.generate_private_key("ssh-ed25519")
         self._server = await asyncssh.create_server(
-            lambda: _GatewaySSHServer(self.manager),
+            lambda: _GatewaySSHServer(self.manager, self._allow_networks),
             self.config.gateway_bind,
             self.config.gateway_port,
             server_host_keys=[host_key],

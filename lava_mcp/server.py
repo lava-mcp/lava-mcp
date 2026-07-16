@@ -20,6 +20,28 @@ from .gateway import Gateway
 from .jobs import build_interactive_job
 
 
+def _lava_username(whoami: Any) -> str | None:
+    """Pull the LAVA username out of a ``system/whoami/`` response."""
+    if isinstance(whoami, dict):
+        for key in ("user", "username"):
+            value = whoami.get(key)
+            if value:
+                return str(value)
+        return None
+    if isinstance(whoami, str):
+        return whoami.strip() or None
+    return None
+
+
+def _enforce_user_allowlist(username: str | None, allow: tuple[str, ...]) -> None:
+    """Raise ``PermissionError`` if an allowlist is set and ``username`` is off it."""
+    if allow and (username is None or username not in allow):
+        raise PermissionError(
+            f"LAVA user {username!r} is not permitted to use interactive board "
+            "sessions on this server"
+        )
+
+
 def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 
@@ -52,6 +74,17 @@ def build_server(config: Config) -> FastMCP:
             request = None
         headers = request.headers if request is not None else None
         return client_from(config, headers)
+
+    def require_session_user() -> str:
+        """Resolve the caller's LAVA user and enforce the gateway username allowlist.
+
+        Discovers the username with the ``whoami`` API (the caller's own token) and
+        raises ``PermissionError`` when ``gateway_allow_users`` is set and excludes
+        them. Returns the resolved username (empty string if none reported).
+        """
+        username = _lava_username(client().whoami())
+        _enforce_user_allowlist(username, config.gateway_allow_users)
+        return username or ""
 
     # -- system / identity -------------------------------------------------
     @mcp.tool()
@@ -228,6 +261,7 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds for the container to connect, then the session is usable
             via run_in_session.
             """
+            require_session_user()
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.create(device_type=device_type)
             job_yaml = build_interactive_job(
@@ -253,12 +287,14 @@ def build_server(config: Config) -> FastMCP:
             session_id: str, command: str, timeout: int = 120
         ) -> Any:
             """Run a shell command inside an open board session, returning output."""
+            require_session_user()
             await asyncio.to_thread(gateway.ensure_started)
             return await gateway.run(session_id, command, timeout=timeout)
 
         @mcp.tool()
         async def close_board_session(session_id: str) -> Any:
             """Close a board session and cancel its LAVA job (releases the board)."""
+            require_session_user()
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.remove(session_id)
             if session is None:
@@ -270,6 +306,7 @@ def build_server(config: Config) -> FastMCP:
         @mcp.tool()
         async def list_board_sessions() -> Any:
             """List the currently-open interactive board sessions."""
+            require_session_user()
             await asyncio.to_thread(gateway.ensure_started)
             return [s.public_view() for s in gateway.manager.list()]
 

@@ -2,13 +2,34 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 from lava_mcp.config import Config
-from lava_mcp.gateway import SessionManager, generate_keypair
+from lava_mcp.gateway import (
+    SessionManager,
+    _GatewaySSHServer,
+    generate_keypair,
+    ip_allowed,
+    parse_networks,
+)
 from lava_mcp.jobs import build_interactive_job
 from lava_mcp.server import build_server
+
+
+class _FakeConn:
+    """Minimal stand-in for an asyncssh connection for the IP-allowlist tests."""
+
+    def __init__(self, peer: tuple[str, int] | None) -> None:
+        self._peer = peer
+        self.closed = False
+
+    def get_extra_info(self, key: str) -> Any:
+        return self._peer if key == "peername" else None
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_generate_keypair() -> None:
@@ -89,3 +110,41 @@ def test_board_tools_registered_when_gateway_enabled() -> None:
 def test_board_tools_absent_without_gateway() -> None:
     names = _tool_names(Config(url="https://x"))
     assert "open_board_session" not in names
+
+
+def test_ip_allowed_empty_allowlist_allows_all() -> None:
+    assert ip_allowed("10.9.8.7", parse_networks(())) is True
+
+
+def test_ip_allowed_matches_cidr_and_bare_ip() -> None:
+    nets = parse_networks(("10.0.0.0/24", "192.168.1.5"))
+    assert ip_allowed("10.0.0.9", nets) is True
+    assert ip_allowed("192.168.1.5", nets) is True
+    assert ip_allowed("192.168.1.6", nets) is False
+    assert ip_allowed("172.16.0.1", nets) is False
+
+
+def test_ip_allowed_normalises_ipv4_mapped_v6() -> None:
+    assert ip_allowed("::ffff:10.0.0.9", parse_networks(("10.0.0.0/24",))) is True
+
+
+def test_ip_allowed_rejects_unparseable_address() -> None:
+    assert ip_allowed("not-an-ip", parse_networks(("10.0.0.0/8",))) is False
+
+
+def test_gateway_ssh_server_rejects_unlisted_ip() -> None:
+    srv = _GatewaySSHServer(SessionManager(), parse_networks(("10.0.0.0/24",)))
+    conn = _FakeConn(("192.168.1.1", 40000))
+    srv.connection_made(conn)
+    assert conn.closed is True
+    assert srv._allowed is False
+    # even if auth is still attempted on the closing connection, it is denied
+    assert srv.validate_public_key("s-whatever", object()) is False
+
+
+def test_gateway_ssh_server_allows_listed_ip() -> None:
+    srv = _GatewaySSHServer(SessionManager(), parse_networks(("10.0.0.0/24",)))
+    conn = _FakeConn(("10.0.0.5", 40000))
+    srv.connection_made(conn)
+    assert conn.closed is False
+    assert srv._allowed is True

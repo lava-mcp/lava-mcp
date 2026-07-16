@@ -13,6 +13,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_list(name: str) -> tuple[str, ...]:
+    """Parse a comma/space-separated env var into a tuple (empty if unset)."""
+    value = os.environ.get(name)
+    if not value:
+        return ()
+    return tuple(item for item in value.replace(",", " ").split() if item)
+
+
 @dataclass
 class Config:
     """Connection + behaviour settings for the LAVA REST client and server.
@@ -45,6 +53,11 @@ class Config:
     # host/port the in-job container should dial back to (advertised in jobs)
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
+    # optional gateway access control (both empty = open):
+    #  - allow_ips: source IPs/CIDRs permitted to connect to the SSH gateway
+    #  - allow_users: LAVA usernames (via whoami) permitted to open board sessions
+    gateway_allow_ips: tuple[str, ...] = ()
+    gateway_allow_users: tuple[str, ...] = ()
     # interactive session assets (container image + test definition location).
     # Override via LAVA_MCP_INTERACTIVE_* if you host the image/repo elsewhere.
     interactive_image: str = "ghcr.io/mattface/lava-mcp/interactive:latest"
@@ -73,6 +86,8 @@ class Config:
             gateway_port=gw_port,
             gateway_advertise_host=os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_HOST"),
             gateway_advertise_port=int(adv_port) if adv_port else None,
+            gateway_allow_ips=_env_list("LAVA_MCP_GATEWAY_ALLOW_IPS"),
+            gateway_allow_users=_env_list("LAVA_MCP_GATEWAY_ALLOW_USERS"),
             interactive_image=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_IMAGE",
                 "ghcr.io/mattface/lava-mcp/interactive:latest",

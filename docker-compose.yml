@@ -23,6 +23,9 @@ services:
       # host/IP that lab worker containers can reach to dial the SSH gateway
       LAVA_MCP_GATEWAY_ADVERTISE_HOST: ${LAVA_MCP_GATEWAY_HOST}
       LAVA_MCP_GATEWAY_ADVERTISE_PORT: "2222"
+      # optional access control (empty = open); see .env.example
+      LAVA_MCP_GATEWAY_ALLOW_IPS: ${LAVA_MCP_GATEWAY_ALLOW_IPS:-}
+      LAVA_MCP_GATEWAY_ALLOW_USERS: ${LAVA_MCP_GATEWAY_ALLOW_USERS:-}
     ports:
       - "2222:2222"   # SSH gateway (TCP) — must be reachable by lab containers
     expose:

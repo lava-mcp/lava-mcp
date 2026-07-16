@@ -53,6 +53,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Host the in-job container should dial back to (default: --host).",
     )
+    parser.add_argument(
+        "--gateway-allow-ip",
+        action="append",
+        default=None,
+        metavar="IP/CIDR",
+        help="Restrict gateway SSH connections to this IP/CIDR (repeatable).",
+    )
+    parser.add_argument(
+        "--gateway-allow-user",
+        action="append",
+        default=None,
+        metavar="USERNAME",
+        help="Restrict interactive board sessions to this LAVA user (repeatable).",
+    )
     args = parser.parse_args(argv)
 
     config = Config.from_env()
@@ -76,6 +90,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.gateway_port = args.gateway_port
     if args.gateway_advertise_host:
         config.gateway_advertise_host = args.gateway_advertise_host
+    if args.gateway_allow_ip:
+        config.gateway_allow_ips = tuple(args.gateway_allow_ip)
+    if args.gateway_allow_user:
+        config.gateway_allow_users = tuple(args.gateway_allow_user)
 
     if config.transport not in ("stdio", "streamable-http"):
         parser.error(f"unsupported transport: {config.transport}")

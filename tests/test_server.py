@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from lava_mcp.config import Config
-from lava_mcp.server import build_server
+from lava_mcp.server import _enforce_user_allowlist, _lava_username, build_server
 
 
 def tool_names(read_only: bool) -> set[str]:
@@ -28,3 +30,23 @@ def test_write_tools_absent_in_read_only() -> None:
     assert "cancel_job" not in names
     # validate_job is non-mutating, so it stays available
     assert "validate_job" in names
+
+
+def test_lava_username_extraction() -> None:
+    assert _lava_username({"user": "alice"}) == "alice"
+    assert _lava_username({"username": "bob"}) == "bob"
+    assert _lava_username("carol") == "carol"
+    assert _lava_username({}) is None
+    assert _lava_username(None) is None
+
+
+def test_enforce_user_allowlist() -> None:
+    # empty allowlist is open: any user (or none) is fine
+    _enforce_user_allowlist("alice", ())
+    _enforce_user_allowlist(None, ())
+    # configured allowlist admits members and rejects everyone else
+    _enforce_user_allowlist("alice", ("alice", "bob"))
+    with pytest.raises(PermissionError):
+        _enforce_user_allowlist("mallory", ("alice", "bob"))
+    with pytest.raises(PermissionError):
+        _enforce_user_allowlist(None, ("alice",))
