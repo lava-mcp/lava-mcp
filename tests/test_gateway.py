@@ -123,6 +123,7 @@ def test_board_tools_registered_when_gateway_enabled() -> None:
         "run_in_session",
         "close_board_session",
         "list_board_sessions",
+        "attach_shell",
     } <= names
 
 

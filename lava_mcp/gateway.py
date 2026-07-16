@@ -342,6 +342,7 @@ class Gateway:
         return {
             "session_id": session_id,
             "private_key": private,
+            "public_key": public,
             "gateway_host": advertise_host,
             "gateway_port": advertise_port,
             "reverse_port": session.reverse_port,

@@ -169,123 +169,101 @@ Then invoke the same tools the agent would:
 
 This is command-at-a-time execution over the gateway, not a live PTY.
 
-### Interactive SSH shell for humans (planned)
+### Interactive SSH shell for humans (`attach_shell`)
 
-> **Not yet implemented** — this is the design for a real interactive shell over the
-> same gateway. The tool and flags below don't exist yet; tracked on the
-> [roadmap](#roadmap).
-
-The plan is for the gateway to double as an **SSH bastion** so a person gets a live PTY
-on the board without an agent and without ever seeing the container's private key. It
-reuses the one listener already published on `:2222`, telling the two callers apart by
-key and channel:
-
-- the **container** authenticates with its per-session key and may only request the
-  reverse forward (as it does today);
-- a **human** authenticates with a short-lived, per-session key and may only open a
-  shell — which the gateway bridges into the board over the existing reverse tunnel,
-  doing the inner hop with the container key itself.
-
-A person would open a session (`open_board_session`), then call a new
-`attach_session(session_id)` tool. That mints an ephemeral keypair, authorizes it for
-the session, and returns the private key plus a ready-to-run command over the
-already-authenticated MCP/HTTPS channel — the container key never leaves the server.
-One line then drops you into the board shell:
+For a live PTY on the board — not command-at-a-time — call `attach_shell(session_id)`.
+It mints a short-lived keypair, authorises it **both** at the gateway (for the tunnel)
+and inside the board container (appended to its `authorized_keys` over the existing
+session), and returns a ready-to-run `ssh` command. You `ProxyJump` through the gateway
+straight into the container's own sshd — the gateway forwards but offers no shell of its
+own, and the container's key is never disclosed:
 
 ```sh
-ssh -i lava-session-<id> -p 2222 <session_id>@<gateway-host>
+# save private_key to lava-shell-<id>.key (chmod 600), then:
+ssh -i lava-shell-<id>.key \
+  -o ProxyJump=<session_id>@<gateway-host>:2222 \
+  -p <reverse_port> root@127.0.0.1
 ```
 
 ```mermaid
 sequenceDiagram
     actor Human
-    participant MCP as lava-mcp + SSH gateway<br/>(bastion)
-    participant Board as Board container<br/>(reverse tunnel already up)
+    participant MCP as lava-mcp + SSH gateway
+    participant Board as Board container<br/>(reverse tunnel up, runs sshd)
 
-    Note over MCP,Board: session already open — container dialed back,<br/>tunnel live at 127.0.0.1:reverse_port
+    Human->>MCP: attach_shell(session_id)
+    Note over MCP: mint ephemeral human key; authorise it<br/>at the gateway AND in the container
+    MCP->>Board: append human key to authorized_keys<br/>(over the session)
+    MCP-->>Human: private key + ssh (ProxyJump) command
 
-    Human->>MCP: attach_session(session_id)
-    Note over MCP: mint ephemeral human keypair,<br/>authorize it for this session
-    MCP-->>Human: private key + ready-to-run ssh command
-
-    Human->>MCP: ssh -p 2222 session_id@gateway<br/>(human key, shell channel)
-    Note over MCP: authenticate human key,<br/>allow shell channel only
-    MCP->>Board: open inner SSH over tunnel<br/>(container key), request PTY + shell
-    Board-->>MCP: PTY
-    MCP-->>Human: bridged PTY
-
+    Human->>MCP: ssh -J session@gateway (human key)
+    Note over MCP: human role — allow direct-tcpip to<br/>127.0.0.1:reverse_port only
+    MCP->>Board: tunnel to the container sshd
+    Human->>Board: authenticate as root (human key) → PTY
     loop live interactive shell
-        Human->>Board: keystrokes (via gateway)
-        Board-->>Human: terminal output (via gateway)
+        Human->>Board: keystrokes (via gateway tunnel)
+        Board-->>Human: terminal output (via gateway tunnel)
     end
 
     Human->>MCP: close_board_session(session_id)
-    Note over MCP: revoke human key
-    MCP->>Board: cancel job (releases the board)
+    Note over MCP: revoke human key; cancel job (container destroyed)
 ```
 
-Human keys are per-session and revoked on `close_board_session`; the whole path sits
-behind a `LAVA_MCP_GATEWAY_HUMAN_ENABLED` flag.
+Human keys expire (`LAVA_MCP_GATEWAY_HUMAN_KEY_TTL`, default 1h) and are revoked on
+`close_board_session`. Your source IP must be inside `LAVA_MCP_GATEWAY_ALLOW_IPS` if set.
+See [docs/security.md](docs/security.md) for the full model.
 
-### Direct serial console via ser2net (planned)
+### Direct serial console via ser2net (`open_console_session` / `attach_console`)
 
-> **Not yet implemented** — design only. The tool, signal, and flag below don't exist
-> yet; tracked on the [roadmap](#roadmap).
+Where `attach_shell` gives you the board's *userspace* (it needs a booted, networked
+board), a **serial console** is the board's actual UART — boot/kernel/panic logs, works
+with no DUT networking, and the login prompt itself. Many LAVA labs front the UART with
+[ser2net](https://github.com/cminyard/ser2net) (the device dict's `connection_command`
+is `telnet <ser2net-host> <port>`), and LAVA drives boot over that same console. This is
+**Mode 2** — used with a LAVA job that deploys and boots an image and runs its test *on
+the board* (no device-attached container), so the in-lab foothold comes from a **LAVA
+Test Services** container (`interactive/ser2net-proxy/`) instead. It needs
+`allow_test_services: true` in the device dict (check with `check_serial_console_support`).
 
-Where the SSH shell above gives you the board's *userspace* (it needs a booted,
-networked board), a **serial console** is the board's actual UART — it shows boot,
-kernel and panic logs, works with no DUT networking, and hands you the login prompt
-itself. Many LAVA labs already front the board's UART with
-[ser2net](https://github.com/cminyard/ser2net) — the device dictionary's
-`connection_command` is typically `telnet <ser2net-host> <port>`, and LAVA drives boot
-over that same console. This path lets a human attach to it.
+Flow:
 
-The catch is not to fight LAVA for the console while it is driving boot. So the
-interactive test definition boots the board and, on reaching a known shell prompt,
-emits a LAVA signal (a `console-ready` lava-test-case). lava-mcp waits for that flag
-before exposing the console:
-
-1. Human opens a session; lava-mcp submits a boot-to-shell job that emits
-   `console-ready`.
-2. lava-mcp watches the job's signals/results and exposes nothing during boot.
-3. Once flagged, a new `get_serial_console(session_id)` tool returns a connect command.
-   Remote humans are bridged through the existing gateway (the ser2net TCP port is
-   reverse-forwarded out, the same `ssh -R` mechanism); in-lab humans get the
-   `telnet <host> <port>` directly.
-4. Human attaches to the **live raw UART** — kernel logs, login prompt, the lot.
-5. `close_board_session` ends the job; LAVA reclaims the console and releases the board.
+1. `open_console_session()` mints a session and returns a `job_environment` block. Add it
+   to your deploy-and-boot job's top-level `environment:`, include the
+   `interactive/ser2net-proxy` **services** block, and set the `SER2NET_*` vars for your
+   lab. Submit the job.
+2. The proxy starts at the beginning of the job, relays the console **read-only** while
+   LAVA drives the boot, and dials **out** (`ssh -R`) to the gateway. When your
+   console-ready test echoes the sentinel (`LAVA_MCP_CONSOLE_WRITABLE`), the proxy
+   enables writes.
+3. `attach_console(session_id)` returns an `ssh -W` command (wrap with `socat` for a raw
+   PTY) — you get the live UART, bridged through the gateway on a loopback-only port.
+4. `close_console_session(session_id)` revokes access; ending the job tears down the proxy.
 
 ```mermaid
 sequenceDiagram
     actor Human
     participant MCP as lava-mcp + gateway
-    participant LAVA as LAVA (dispatcher<br/>drives the console)
+    participant Proxy as ser2net-proxy<br/>(Test Services, in lab)
     participant Ser2net as ser2net → board UART
 
-    Human->>MCP: open_board_session(device_type)
-    MCP->>LAVA: submit boot-to-shell job<br/>(emit console-ready on prompt)
-    LAVA->>Ser2net: drive boot over the serial console
-    Note over LAVA,Ser2net: watch for the shell prompt
-    LAVA-->>MCP: signal "booted to shell" (console-ready)
-
-    Human->>MCP: get_serial_console(session_id)
-    Note over MCP: bridge ser2net's TCP port out<br/>via the gateway (ssh -R)
-    MCP-->>Human: connect command (telnet/nc through gateway)
-
-    Human->>Ser2net: attach to the raw UART (via gateway)
+    Human->>MCP: open_console_session() → job_environment
+    Note over Human: embed in a deploy+boot job<br/>with the services block, submit
+    Proxy->>Ser2net: connect to the console (read-only)
+    Proxy->>MCP: dial out ssh -R (loopback reverse port)
+    Note over Proxy: console-ready sentinel → enable writes
+    Human->>MCP: attach_console(session_id) → ssh -W command
+    Human->>MCP: ssh -W 127.0.0.1:reverse_port (human key)
+    MCP->>Proxy: tunnel to the relay
     loop live serial console
-        Human->>Ser2net: keystrokes
+        Human->>Ser2net: keystrokes (via gateway → proxy)
         Ser2net-->>Human: boot/kernel logs + shell output
     end
-
-    Human->>MCP: close_board_session(session_id)
-    MCP->>LAVA: cancel job — LAVA reclaims console, releases board
+    Human->>MCP: close_console_session(session_id)
 ```
 
-**Console handoff** is the one wrinkle: either ser2net is configured for multiple
-connections (the human shares the console LAVA already holds), or the job idles after
-boot — reservation held, console released — and the human takes it over. Gated behind a
-`LAVA_MCP_SERIAL_CONSOLE_ENABLED` flag.
+**Console handoff** wrinkle: ser2net must allow the proxy's concurrent connection (or the
+job idles after boot so LAVA releases the console). Confirmed working on staging. A ready
+test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
 
 ## Configuration
 
@@ -315,7 +293,10 @@ Read/observe: `whoami`, `version`, `list_devices`, `get_device`,
 Write (omitted with `--read-only`): `submit_job`, `cancel_job`, `resubmit_job`.
 
 Interactive board sessions (hosted gateway mode): `open_board_session`,
-`run_in_session`, `close_board_session`, `list_board_sessions`.
+`run_in_session`, `attach_shell`, `close_board_session`, `list_board_sessions`.
+
+Serial console (hosted gateway mode): `check_serial_console_support`,
+`open_console_session`, `attach_console`, `close_console_session`.
 
 ## Test
 

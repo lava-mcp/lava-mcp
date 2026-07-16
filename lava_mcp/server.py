@@ -392,6 +392,58 @@ def build_server(config: Config) -> FastMCP:
                 if s.owner in (None, user)
             ]
 
+        @mcp.tool()
+        async def attach_shell(session_id: str) -> Any:
+            """Get an ssh command for an interactive shell in a board container.
+
+            Mints a short-lived key, authorises it both at the gateway and inside the
+            board container, and returns an ``ssh`` command that jumps through the
+            gateway into the container's shell. The container's own key is never
+            disclosed; the gateway itself offers no shell.
+            """
+            user = require_session_user()
+            await asyncio.to_thread(gateway.ensure_started)
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"error": f"unknown session {session_id}"}
+            _require_owner(session, user)
+            if session.kind != "container":
+                return {
+                    "error": f"session {session_id} is not a container session; "
+                    "use attach_console for console sessions"
+                }
+            if session.status != "connected":
+                return {"error": f"session {session_id} is not connected yet"}
+            info = gateway.attach_human(session_id)
+            # authorise the human key inside the board container so it can log in over
+            # the tunnel (the container is ephemeral — destroyed when the job ends).
+            pub = info["public_key"].replace("'", "")
+            push = await gateway.run(
+                session_id,
+                "mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+                f"printf '%s\\n' '{pub}' >> /root/.ssh/authorized_keys",
+            )
+            if push.get("exit_status") not in (0, None):
+                return {"error": "failed to authorise key in container", "detail": push}
+            key_file = f"lava-shell-{session_id}.key"
+            ssh = (
+                f"ssh -i {key_file} -o StrictHostKeyChecking=no "
+                f"-o UserKnownHostsFile=/dev/null "
+                f"-o ProxyJump={session_id}@{info['gateway_host']}:{info['gateway_port']} "
+                f"-p {info['reverse_port']} {session.container_user}@127.0.0.1"
+            )
+            return {
+                "session_id": session_id,
+                "private_key": info["private_key"],
+                "ssh_command": ssh,
+                "expires_in": info["expires_in"],
+                "note": (
+                    f"save private_key to {key_file} (chmod 600), then run ssh_command "
+                    "for a shell. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                ),
+            }
+
         # -- serial console (Mode 2: ser2net proxy via LAVA Test Services) ----
         @mcp.tool()
         def check_serial_console_support(hostname: str) -> Any:

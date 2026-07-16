@@ -27,6 +27,12 @@ decides the role:
 The gateway itself offers **no shell/exec/sftp and no UNIX-socket forwarding** to anyone
 (`session_requested`, `unix_*` all denied). It is a pure rendezvous.
 
+The interactive **container shell** (`attach_shell`) uses this same human `-W`/direct-
+tcpip: lava-mcp authorises the human's ephemeral key inside the board container and the
+human `ssh -J`'s through the gateway into the **container's own sshd** for the PTY. The
+gateway never bridges a shell itself; the container is ephemeral (destroyed with the
+job). The **serial console** (`attach_console`) is the same forward to the console relay.
+
 ## Enforced controls (and where)
 
 - **Loopback-only reverse tunnel** — `_GatewaySSHServer.server_requested` refuses any

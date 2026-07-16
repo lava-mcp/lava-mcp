@@ -24,7 +24,18 @@ restrictions; see `docs/security.md`.
 
 ---
 
-## A. Human interactive SSH shell (gateway as bastion) 🟡
+## A. Human interactive SSH shell — SHIPPED 🟢
+
+Implemented as `attach_shell(session_id)`, but **not** via a gateway PTY bastion (the
+original design below). Instead it reuses the human role's `-W`/direct-tcpip: it mints an
+ephemeral key, authorises it at the gateway AND appends it to the board container's
+`authorized_keys` (over the session), and returns an `ssh -o ProxyJump=...` command. The
+human's `ssh` jumps through the gateway into the **container's own sshd** for the PTY —
+so the gateway still offers no shell of its own (better security posture, no custom PTY
+bridging). Owner-scoped and TTL-limited like the console path. Original bastion design
+kept below for reference.
+
+### Original bastion design (not used)
 
 **Goal.** `ssh -p 2222 <session_id>@<gateway>` drops a human into a live PTY on the
 board's container, without the human ever holding the container's private key.
