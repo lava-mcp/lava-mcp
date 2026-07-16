@@ -34,6 +34,6 @@ exec autossh -M 0 -N \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
     -i /root/.ssh/session_key \
-    -R "${REVERSE_PORT}:localhost:22" \
+    -R "127.0.0.1:${REVERSE_PORT}:localhost:22" \
     -p "${GATEWAY_PORT}" \
     "${SESSION_ID}@${GATEWAY_HOST}"

@@ -10,7 +10,11 @@ config for local stdio use.
 from __future__ import annotations
 
 import asyncio
+import base64
+import logging
 from typing import Any
+
+logger = logging.getLogger("lava_mcp")
 
 from mcp.server.fastmcp import FastMCP
 
@@ -80,6 +84,20 @@ def _require_test_services_device(client: LavaClient, hostname: str) -> None:
         )
 
 
+def _require_owner(session: Any, username: str) -> None:
+    """Raise ``PermissionError`` unless ``username`` owns ``session``.
+
+    Sessions grant access to lab hardware, so only the LAVA user who opened one may
+    operate on it — otherwise any allowlisted user could pivot into another user's
+    board or console.
+    """
+    owner = getattr(session, "owner", None)
+    if owner is not None and owner != username:
+        raise PermissionError(
+            f"session {session.session_id} belongs to another user"
+        )
+
+
 def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 
@@ -88,6 +106,16 @@ def build_server(config: Config) -> FastMCP:
     gateway is enabled (hosted mode).
     """
     gateway = Gateway(config) if config.gateway_enabled else None
+
+    if gateway is not None and not config.gateway_allow_ips:
+        # The gateway still requires a valid per-session key, but with no source-IP
+        # allowlist anyone on the network may attempt to connect. Strongly recommend
+        # restricting it to the lab (and any human/VPN ranges).
+        logger.warning(
+            "gateway enabled with no LAVA_MCP_GATEWAY_ALLOW_IPS: the SSH gateway "
+            "accepts connections from any source IP. Set an allowlist for the lab "
+            "(and human/VPN) networks."
+        )
 
     # NOTE: the gateway is a process-lifetime singleton running in its own thread.
     # It is deliberately NOT started/stopped via the FastMCP lifespan: in stateful
@@ -299,12 +327,12 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds for the container to connect, then the session is usable
             via run_in_session.
             """
-            require_session_user()
+            user = require_session_user()
             _require_remote_access_device(
                 client(), device_type, config.remote_access_tag
             )
             await asyncio.to_thread(gateway.ensure_started)
-            session = gateway.manager.create(device_type=device_type)
+            session = gateway.manager.create(device_type=device_type, owner=user)
             job_yaml = build_interactive_job(
                 config,
                 session,
@@ -328,27 +356,141 @@ def build_server(config: Config) -> FastMCP:
             session_id: str, command: str, timeout: int = 120
         ) -> Any:
             """Run a shell command inside an open board session, returning output."""
-            require_session_user()
+            user = require_session_user()
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"error": f"unknown session {session_id}"}
+            _require_owner(session, user)
+            if session.kind != "container":
+                return {"error": f"session {session_id} is not a container session"}
             await asyncio.to_thread(gateway.ensure_started)
             return await gateway.run(session_id, command, timeout=timeout)
 
         @mcp.tool()
         async def close_board_session(session_id: str) -> Any:
             """Close a board session and cancel its LAVA job (releases the board)."""
-            require_session_user()
-            await asyncio.to_thread(gateway.ensure_started)
-            session = gateway.manager.remove(session_id)
+            user = require_session_user()
+            session = gateway.manager.get(session_id)
             if session is None:
                 return {"closed": False, "reason": "unknown session"}
+            _require_owner(session, user)
+            await asyncio.to_thread(gateway.ensure_started)
+            gateway.manager.remove(session_id)
+            session.revoke_human_keys()
             cancel = client().cancel_job(session.job_id) if session.job_id else None
             session.status = "closed"
             return {"closed": True, "job_id": session.job_id, "cancel": cancel}
 
         @mcp.tool()
         async def list_board_sessions() -> Any:
-            """List the currently-open interactive board sessions."""
-            require_session_user()
+            """List the interactive board sessions you own."""
+            user = require_session_user()
             await asyncio.to_thread(gateway.ensure_started)
-            return [s.public_view() for s in gateway.manager.list()]
+            return [
+                s.public_view()
+                for s in gateway.manager.list()
+                if s.owner in (None, user)
+            ]
+
+        # -- serial console (Mode 2: ser2net proxy via LAVA Test Services) ----
+        @mcp.tool()
+        def check_serial_console_support(hostname: str) -> Any:
+            """Check whether a device permits the serial-console proxy.
+
+            The proxy runs as a LAVA Test Services container, which LAVA only allows on
+            devices whose dictionary sets ``allow_test_services: true``.
+            """
+            allowed = client().allows_test_services(hostname)
+            return {
+                "hostname": hostname,
+                "allow_test_services": allowed,
+                "ok": allowed,
+                "message": (
+                    "ready"
+                    if allowed
+                    else f"{hostname} does not set allow_test_services; a lab admin "
+                    "must enable it before the serial-console proxy can run."
+                ),
+            }
+
+        @mcp.tool()
+        async def open_console_session(device_type: str | None = None) -> Any:
+            """Reserve a serial-console session to embed in your own LAVA job (Mode 2).
+
+            Mints a session the ser2net-proxy Test Services container dials back to over
+            the gateway. Returns values to add to your job's top-level ``environment:``
+            (LAVA writes them into the proxy's compose .env) so the proxy can dial out.
+            Add the ``interactive/ser2net-proxy`` services block to the same job and set
+            the ``SER2NET_*`` vars for your device. Once the job boots and the proxy
+            connects, call ``attach_console(session_id)`` for a connect command.
+            """
+            user = require_session_user()
+            await asyncio.to_thread(gateway.ensure_started)
+            session = gateway.manager.create(
+                device_type=device_type, kind="console", owner=user
+            )
+            advertise_host = config.gateway_advertise_host or config.host
+            advertise_port = config.gateway_advertise_port or config.gateway_port
+            # a compose .env cannot hold the multi-line PEM, so base64 it (single line);
+            # the proxy's connect script decodes it.
+            key_b64 = base64.b64encode(session.private_key.encode()).decode()
+            return {
+                "session_id": session.session_id,
+                "reverse_port": session.reverse_port,
+                "job_environment": {
+                    "GATEWAY_HOST": advertise_host,
+                    "GATEWAY_PORT": str(advertise_port),
+                    "SESSION_ID": session.session_id,
+                    "REVERSE_PORT": str(session.reverse_port),
+                    "SESSION_PRIVATE_KEY_B64": key_b64,
+                },
+            }
+
+        @mcp.tool()
+        async def attach_console(session_id: str) -> Any:
+            """Get a command to attach to an open serial-console session as a human.
+
+            Mints a short-lived key authorised for this session and returns an
+            ``ssh -W`` command that tunnels to the board console through the gateway.
+            The board/proxy key is never disclosed. The console is read-only until the
+            job emits console-ready.
+            """
+            user = require_session_user()
+            await asyncio.to_thread(gateway.ensure_started)
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"error": f"unknown session {session_id}"}
+            _require_owner(session, user)
+            if session.kind != "console":
+                return {"error": f"session {session_id} is not a console session"}
+            info = gateway.attach_human(session_id)
+            key_file = f"lava-console-{session_id}.key"
+            ssh = (
+                f"ssh -i {key_file} -p {info['gateway_port']} "
+                f"-W 127.0.0.1:{info['reverse_port']} {session_id}@{info['gateway_host']}"
+            )
+            return {
+                "session_id": session_id,
+                "private_key": info["private_key"],
+                "ssh_W_command": ssh,
+                "raw_console": (
+                    f"# save private_key to {key_file} (chmod 600), then for a raw "
+                    f"console:\nsocat -,raw,echo=0,escape=0x1d 'EXEC:{ssh},pty'"
+                ),
+                "note": "Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set.",
+            }
+
+        @mcp.tool()
+        async def close_console_session(session_id: str) -> Any:
+            """Close a serial-console session and revoke its human keys."""
+            user = require_session_user()
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"closed": False, "reason": "unknown session"}
+            _require_owner(session, user)
+            gateway.manager.remove(session_id)
+            session.revoke_human_keys()
+            session.status = "closed"
+            return {"closed": True, "session_id": session_id}
 
     return mcp

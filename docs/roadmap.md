@@ -13,6 +13,15 @@ and the per-device `allow-remote-access` **tag** gate (`LAVA_MCP_REMOTE_ACCESS_T
 `open_board_session` fails fast if no device of the type carries the tag, and every
 interactive job is pinned to it so LAVA only schedules on a permitted device.
 
+Also shipped since: **Mode 2 dial-out serial console** — the ser2net-proxy image
+(`interactive/ser2net-proxy/`, published to GHCR) dials out of the lab and reverse-
+forwards the gated console; `open_console_session` / `attach_console` /
+`close_console_session` / `check_serial_console_support` tools. **Human access** via
+ephemeral, expiring keys + `ssh -W` through the gateway (Feature A's key/forwarding
+half; the container PTY bastion below is still open). **Per-user session ownership**
+(Feature C). **Security hardening** — loopback-only reverse tunnels and channel-type
+restrictions; see `docs/security.md`.
+
 ---
 
 ## A. Human interactive SSH shell (gateway as bastion) 🟡

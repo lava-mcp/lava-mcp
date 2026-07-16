@@ -8,10 +8,17 @@ from lava_mcp.config import Config
 from lava_mcp.server import (
     _enforce_user_allowlist,
     _lava_username,
+    _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
     build_server,
 )
+
+
+class _OwnedSession:
+    def __init__(self, owner: str | None) -> None:
+        self.owner = owner
+        self.session_id = "s-1"
 
 
 class _FakeDevicesClient:
@@ -96,6 +103,13 @@ def test_require_test_services_device_passes_when_allowed() -> None:
 def test_require_test_services_device_raises_when_disabled() -> None:
     with pytest.raises(PermissionError, match="allow_test_services"):
         _require_test_services_device(_FakeServicesClient(allowed=False), "rb3g2-01")
+
+
+def test_require_owner_enforces_session_ownership() -> None:
+    _require_owner(_OwnedSession("alice"), "alice")  # owner ok
+    _require_owner(_OwnedSession(None), "alice")  # unowned (legacy) ok
+    with pytest.raises(PermissionError, match="another user"):
+        _require_owner(_OwnedSession("bob"), "alice")
 
 
 def test_enforce_user_allowlist() -> None:

@@ -4,22 +4,26 @@
 # network (a real DNS/hosts name or a host-published port) rather than via a Docker
 # network. Select it by pointing the job's services `path` at this file. The
 # external-network (default) variant is docker-compose.yml. Behaviour is identical:
-# starts at the beginning of the job and relays the console read-only until the
-# console-ready sentinel is seen (see console-proxy.py).
+# starts at the beginning of the job, relays read-only until console-ready, and dials
+# OUT to the lava-mcp gateway when a session is configured.
 #
 # Overridable via the job/device `environment` (LAVA writes it to the compose .env):
-#   SER2NET_HOST/PORT       console endpoint reachable from the worker host
-#   CONSOLE_LISTEN_PORT     port watchers connect to
-#   CONSOLE_READY_SENTINEL  string that unlocks writes (match the job's echo)
+#   SER2NET_HOST/PORT        console endpoint reachable from the worker host
+#   CONSOLE_LISTEN_PORT      port the relay listens on (reverse-forwarded to the gateway)
+#   CONSOLE_READY_SENTINEL   string that unlocks writes (match the job's echo)
+#   GATEWAY_HOST/PORT, SESSION_ID, REVERSE_PORT, SESSION_PRIVATE_KEY_B64  (dial-out)
 services:
   ser2net-proxy:
-    image: python:3.12-alpine
+    image: ghcr.io/mattface/lava-mcp/ser2net-proxy:latest
+    pull_policy: always
     network_mode: host
-    volumes:
-      - ./console-proxy.py:/console-proxy.py:ro
     environment:
       SER2NET_HOST: ${SER2NET_HOST:-ser2net}
       SER2NET_PORT: ${SER2NET_PORT:-7095}
       CONSOLE_LISTEN_PORT: ${CONSOLE_LISTEN_PORT:-2323}
       CONSOLE_READY_SENTINEL: ${CONSOLE_READY_SENTINEL:-LAVA_MCP_CONSOLE_WRITABLE}
-    command: ["python3", "/console-proxy.py"]
+      GATEWAY_HOST: ${GATEWAY_HOST:-}
+      GATEWAY_PORT: ${GATEWAY_PORT:-2222}
+      SESSION_ID: ${SESSION_ID:-}
+      REVERSE_PORT: ${REVERSE_PORT:-}
+      SESSION_PRIVATE_KEY_B64: ${SESSION_PRIVATE_KEY_B64:-}

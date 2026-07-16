@@ -61,6 +61,8 @@ class Config:
     # LAVA device tag a device must carry to host interactive/remote-access jobs.
     # open_board_session requires it and pins the job to it. Empty disables the gate.
     remote_access_tag: str = "allow-remote-access"
+    # how long an ephemeral human access key (from attach_*) stays valid, in seconds
+    gateway_human_key_ttl: float = 3600.0
     # interactive session assets (container image + test definition location).
     # Override via LAVA_MCP_INTERACTIVE_* if you host the image/repo elsewhere.
     interactive_image: str = "ghcr.io/mattface/lava-mcp/interactive:latest"
@@ -93,6 +95,9 @@ class Config:
             gateway_allow_users=_env_list("LAVA_MCP_GATEWAY_ALLOW_USERS"),
             remote_access_tag=os.environ.get(
                 "LAVA_MCP_REMOTE_ACCESS_TAG", "allow-remote-access"
+            ),
+            gateway_human_key_ttl=float(
+                os.environ.get("LAVA_MCP_GATEWAY_HUMAN_KEY_TTL", "3600")
             ),
             interactive_image=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_IMAGE",

@@ -137,6 +137,11 @@ checks up front that the device-type has at least one such device and fails with
 actionable message if not, and every interactive job is pinned to the tag so LAVA only
 schedules it on a permitted device.
 
+The gateway tunnels into an isolated lab network, so its trust model matters — see
+[docs/security.md](docs/security.md) for the roles, enforced controls (loopback-only
+reverse tunnels, per-session keys, ephemeral human keys, session ownership), and the
+operator responsibilities (set `LAVA_MCP_GATEWAY_ALLOW_IPS`, expose only 2222).
+
 ### For humans (without an agent)
 
 The gateway has no dedicated human client — but the board-session tools are just MCP
@@ -298,6 +303,7 @@ boot — reservation held, console released — and the human takes it over. Gat
 | `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
 | `LAVA_MCP_GATEWAY_ALLOW_USERS` | `--gateway-allow-user` | LAVA usernames allowed to open board sessions (empty = all) |
 | `LAVA_MCP_REMOTE_ACCESS_TAG` | `--remote-access-tag` | Device tag required to host remote-access sessions (empty = no gate) |
+| `LAVA_MCP_GATEWAY_HUMAN_KEY_TTL` | — | Lifetime (seconds) of an ephemeral human access key from `attach_*` (default 3600) |
 
 ## Tools (v1)
 

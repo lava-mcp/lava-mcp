@@ -67,6 +67,15 @@ def generate_keypair() -> tuple[str, str]:
     return private, public
 
 
+def _key_matches(key: asyncssh.SSHKey, authorized_pub: str) -> bool:
+    """True if ``key`` equals the public key encoded in ``authorized_pub``."""
+    try:
+        authorized = asyncssh.import_public_key(authorized_pub)
+    except (asyncssh.KeyImportError, ValueError):
+        return False
+    return key == authorized
+
+
 def free_port() -> int:
     """Pick a currently-free TCP port to assign to a session's reverse tunnel."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -82,18 +91,43 @@ class BoardSession:
     private_key: str
     public_key: str
     reverse_port: int
+    # "container" (Mode 1: reverse_port -> board container sshd) or
+    # "console" (Mode 2: reverse_port -> ser2net console relay in the job container)
+    kind: str = "container"
     container_user: str = "root"
     device_type: str | None = None
     job_id: int | None = None
+    # LAVA username that opened the session; only the owner may operate on it
+    owner: str | None = None
     status: str = "pending"  # pending -> connected -> closed
     created: float = field(default_factory=time.time)
+    # short-lived public keys authorised for human access, mapped to expiry (epoch s)
+    human_keys: dict[str, float] = field(default_factory=dict)
     # set (from the gateway loop) when the container's reverse tunnel registers
     _connected: threading.Event = field(default_factory=threading.Event, repr=False)
+
+    def authorize_human(self, public_key: str, ttl: float) -> float:
+        """Authorise an ephemeral human public key for ``ttl`` seconds; return expiry."""
+        pub = public_key.strip()
+        expires = time.time() + ttl
+        if pub:
+            self.human_keys[pub] = expires
+        return expires
+
+    def active_human_keys(self) -> list[str]:
+        """Authorised human public keys that have not expired."""
+        now = time.time()
+        return [pub for pub, exp in self.human_keys.items() if exp > now]
+
+    def revoke_human_keys(self) -> None:
+        self.human_keys.clear()
 
     def public_view(self) -> dict[str, Any]:
         """Session info safe to return to a client (no private key)."""
         return {
             "session_id": self.session_id,
+            "kind": self.kind,
+            "owner": self.owner,
             "job_id": self.job_id,
             "device_type": self.device_type,
             "status": self.status,
@@ -107,14 +141,21 @@ class SessionManager:
     def __init__(self) -> None:
         self.sessions: dict[str, BoardSession] = {}
 
-    def create(self, device_type: str | None = None) -> BoardSession:
+    def create(
+        self,
+        device_type: str | None = None,
+        kind: str = "container",
+        owner: str | None = None,
+    ) -> BoardSession:
         private, public = generate_keypair()
         session = BoardSession(
             session_id="s-" + uuid.uuid4().hex[:12],
             private_key=private,
             public_key=public,
             reverse_port=free_port(),
+            kind=kind,
             device_type=device_type,
+            owner=owner,
         )
         self.sessions[session.session_id] = session
         return session
@@ -140,6 +181,8 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         self._username: str | None = None
         self._allow_networks = allow_networks or []
         self._allowed = True
+        self._session: BoardSession | None = None
+        self._role: str | None = None  # "agent" (dial-out) | "human" (watcher)
 
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         peer = conn.get_extra_info("peername")
@@ -162,23 +205,59 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         session = self._manager.get(username)
         if session is None:
             return False
-        try:
-            authorized = asyncssh.import_public_key(session.public_key)
-        except (asyncssh.KeyImportError, ValueError):
-            return False
-        return key == authorized
+        self._session = session
+        # the dial-out agent (board container / console proxy) holds the session key
+        if _key_matches(key, session.public_key):
+            self._role = "agent"
+            return True
+        # a human attached to the session holds a short-lived, non-expired key
+        if any(_key_matches(key, pub) for pub in session.active_human_keys()):
+            self._role = "human"
+            return True
+        return False
 
     def server_requested(self, listen_host: str, listen_port: int) -> bool:
-        # Container requests `ssh -R <reverse_port>:localhost:22`. Only accept the
-        # port we pre-allocated for this authenticated session.
-        if not self._allowed:
+        # The dial-out agent requests `ssh -R <reverse_port>:localhost:<svc>`. Only the
+        # agent role may reverse-forward, and only the port we pre-allocated.
+        if not self._allowed or self._role != "agent" or self._session is None:
             return False
-        session = self._manager.get(self._username or "")
-        if session is None or listen_port != session.reverse_port:
+        if listen_port != self._session.reverse_port:
             return False
-        session.status = "connected"
-        session._connected.set()
+        # SECURITY (critical): only ever bind the reverse tunnel to loopback. asyncssh
+        # binds to the client-requested host, and an empty/0.0.0.0 request would expose
+        # the tunnelled lab service on the master with NO SSH auth and NO IP allowlist.
+        # Reachable only from the master itself -> only via an authenticated human -W.
+        if listen_host not in ("127.0.0.1", "localhost", "::1"):
+            return False
+        self._session.status = "connected"
+        self._session._connected.set()
         return True
+
+    def connection_requested(
+        self, dest_host: str, dest_port: int, orig_host: str, orig_port: int
+    ) -> bool:
+        # A human forwards into the session with `ssh -W 127.0.0.1:<reverse_port>`.
+        # Only the human role may do this, and only to their own session's loopback
+        # port; the traffic then rides the agent's reverse tunnel to the board.
+        if not self._allowed or self._role != "human" or self._session is None:
+            return False
+        return dest_host in ("127.0.0.1", "localhost", "::1") and (
+            dest_port == self._session.reverse_port
+        )
+
+    # SECURITY: the gateway is a pure rendezvous. It offers no shell/exec/sftp of its
+    # own and no UNIX-socket forwarding, for any role. (asyncssh defaults deny these;
+    # we override explicitly so the posture is not an accident of the base class.)
+    def session_requested(self) -> bool:
+        return False
+
+    def unix_server_requested(self, listen_path: str) -> bool:
+        return False
+
+    def unix_connection_requested(
+        self, dest_path: str, orig_host: str, orig_port: int
+    ) -> bool:
+        return False
 
 
 class Gateway:
@@ -245,6 +324,31 @@ class Gateway:
         if self._loop is None:
             raise GatewayError("gateway is not started")
         return asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, self._loop))
+
+    def attach_human(self, session_id: str) -> dict[str, Any]:
+        """Mint an ephemeral keypair and authorise it for human access to a session.
+
+        The key is authorised for ``gateway_human_key_ttl`` seconds only. Returns the
+        private key plus the coordinates a human needs to connect (via ``ssh -W``
+        through the gateway). The board/console key is never disclosed.
+        """
+        session = self.manager.get(session_id)
+        if session is None:
+            raise GatewayError(f"unknown session {session_id}")
+        private, public = generate_keypair()
+        expires = session.authorize_human(public, ttl=self.config.gateway_human_key_ttl)
+        advertise_host = self.config.gateway_advertise_host or self.config.host
+        advertise_port = self.config.gateway_advertise_port or self.config.gateway_port
+        return {
+            "session_id": session_id,
+            "private_key": private,
+            "gateway_host": advertise_host,
+            "gateway_port": advertise_port,
+            "reverse_port": session.reverse_port,
+            "kind": session.kind,
+            "expires_in": int(self.config.gateway_human_key_ttl),
+            "expires_at": expires,
+        }
 
     async def wait_connected(self, session_id: str, timeout: float) -> bool:
         session = self.manager.get(session_id)
