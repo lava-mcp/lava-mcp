@@ -42,6 +42,29 @@ def _enforce_user_allowlist(username: str | None, allow: tuple[str, ...]) -> Non
         )
 
 
+def _require_remote_access_device(
+    client: LavaClient, device_type: str, tag: str
+) -> None:
+    """Ensure at least one device of ``device_type`` carries the remote-access tag.
+
+    Interactive sessions may only run on devices an admin has opted in by tagging.
+    Fail fast with an actionable message rather than submitting a job that would
+    queue forever against a device-type with no permitted device.
+    """
+    if not tag:
+        return
+    result = client.list_devices(device_type=device_type, limit=1, **{"tags__name": tag})
+    count = result.get("count")
+    if count is None:
+        count = len(result.get("results") or [])
+    if not count:
+        raise PermissionError(
+            f"Remote access is not enabled for device-type {device_type!r}: no device "
+            f"carries the {tag!r} tag. Ask a lab admin to tag a device of this type "
+            "for remote access, or choose a different device-type."
+        )
+
+
 def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 
@@ -262,6 +285,9 @@ def build_server(config: Config) -> FastMCP:
             via run_in_session.
             """
             require_session_user()
+            _require_remote_access_device(
+                client(), device_type, config.remote_access_tag
+            )
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.create(device_type=device_type)
             job_yaml = build_interactive_job(

@@ -67,6 +67,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="USERNAME",
         help="Restrict interactive board sessions to this LAVA user (repeatable).",
     )
+    parser.add_argument(
+        "--remote-access-tag",
+        default=None,
+        metavar="TAG",
+        help="Device tag required to host remote-access sessions "
+        "(default: allow-remote-access; empty string disables the gate).",
+    )
     args = parser.parse_args(argv)
 
     config = Config.from_env()
@@ -94,6 +101,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.gateway_allow_ips = tuple(args.gateway_allow_ip)
     if args.gateway_allow_user:
         config.gateway_allow_users = tuple(args.gateway_allow_user)
+    if args.remote_access_tag is not None:
+        config.remote_access_tag = args.remote_access_tag
 
     if config.transport not in ("stdio", "streamable-http"):
         parser.error(f"unsupported transport: {config.transport}")

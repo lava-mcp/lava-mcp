@@ -61,7 +61,8 @@ def test_build_interactive_job_carries_session_params() -> None:
         build_interactive_job(cfg, session, device_type="qcs6490", tags=["wifi"])
     )
     assert job["device_type"] == "qcs6490"
-    assert job["tags"] == ["wifi"]
+    # user tags are preserved and the remote-access tag is pinned on
+    assert job["tags"] == ["wifi", "allow-remote-access"]
     test_action = job["actions"][0]["test"]
     assert test_action["docker"]["image"] == cfg.interactive_image
     definition = test_action["definitions"][0]
@@ -73,6 +74,20 @@ def test_build_interactive_job_carries_session_params() -> None:
     assert params["GATEWAY_HOST"] == "gw.example.com"
     assert params["GATEWAY_PORT"] == "2222"
     assert params["SESSION_PUBLIC_KEY"] == session.public_key
+
+
+def test_build_interactive_job_pins_remote_access_tag_without_user_tags() -> None:
+    cfg = Config(url="https://lava.example.com")
+    session = SessionManager().create(device_type="qcs6490")
+    job = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
+    assert job["tags"] == ["allow-remote-access"]
+
+
+def test_build_interactive_job_tag_gate_can_be_disabled() -> None:
+    cfg = Config(url="https://lava.example.com", remote_access_tag="")
+    session = SessionManager().create(device_type="qcs6490")
+    job = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
+    assert "tags" not in job
 
 
 def test_interactive_assets_match_contract() -> None:

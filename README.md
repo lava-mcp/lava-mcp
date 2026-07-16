@@ -130,6 +130,13 @@ Two optional allowlists gate the gateway (both default to open):
   use the board-session tools. The server discovers the caller's identity from their
   token via the `whoami` API and rejects anyone off the list.
 
+Interactive sessions are also gated **per device**: they only run on devices an admin
+has opted in by tagging with `allow-remote-access` (override the tag name with
+`LAVA_MCP_REMOTE_ACCESS_TAG`; set it empty to disable the gate). `open_board_session`
+checks up front that the device-type has at least one such device and fails with an
+actionable message if not, and every interactive job is pinned to the tag so LAVA only
+schedules it on a permitted device.
+
 ### For humans (without an agent)
 
 The gateway has no dedicated human client — but the board-session tools are just MCP
@@ -290,6 +297,7 @@ boot — reservation held, console released — and the human takes it over. Gat
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
 | `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
 | `LAVA_MCP_GATEWAY_ALLOW_USERS` | `--gateway-allow-user` | LAVA usernames allowed to open board sessions (empty = all) |
+| `LAVA_MCP_REMOTE_ACCESS_TAG` | `--remote-access-tag` | Device tag required to host remote-access sessions (empty = no gate) |
 
 ## Tools (v1)
 

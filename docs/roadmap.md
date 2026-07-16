@@ -7,9 +7,11 @@ functions, config, tests, and the open questions to resolve first.
 Status legend: 🟢 shipped · 🟡 planned (design agreed) · 🔵 proposed (not yet agreed).
 
 Shipped foundation (for reference): the SSH rendezvous gateway, `open_board_session` /
-`run_in_session` / `close_board_session` / `list_board_sessions`, and the gateway
-access-control allowlists (`LAVA_MCP_GATEWAY_ALLOW_IPS`,
-`LAVA_MCP_GATEWAY_ALLOW_USERS`).
+`run_in_session` / `close_board_session` / `list_board_sessions`, the gateway
+access-control allowlists (`LAVA_MCP_GATEWAY_ALLOW_IPS`, `LAVA_MCP_GATEWAY_ALLOW_USERS`),
+and the per-device `allow-remote-access` **tag** gate (`LAVA_MCP_REMOTE_ACCESS_TAG`):
+`open_board_session` fails fast if no device of the type carries the tag, and every
+interactive job is pinned to it so LAVA only schedules on a permitted device.
 
 ---
 
@@ -66,46 +68,90 @@ expiry rejects.
 
 ---
 
-## B. Direct serial console via ser2net 🟡
+## B. Direct serial console (LAVA-deploy-and-boot jobs) 🟡
 
-**Goal.** After the LAVA job flags it has booted to a shell, a human attaches to the
-board's raw UART (fronted by ser2net) — boot/kernel/panic logs and the login prompt,
-no DUT networking required.
+**Two interactive modes.** These are different LAVA job styles and must not be conflated:
+- **Mode 1 (bring-up / flashing) — built.** A device-attached *docker test action*
+  container dials out to the gateway; used for `qdl`/`fastboot`/`adb` when the board may
+  have no OS. Covered by `open_board_session` + the SSH gateway.
+- **Mode 2 (deploy + boot, test-on-board) — this feature.** LAVA deploys and boots an
+  image and the test action runs *on the board itself* — there is **no** device-attached
+  container. The serial console lets a human watch/interact with the booted system's UART.
 
-**Current gap.** Nothing exists: no boot-ready signal, no ser2net endpoint discovery,
-no console tool or bridge.
+**Goal.** After the job flags it has booted to a shell, a human reaches the board's raw
+serial console (boot/kernel/panic logs, login prompt) — no DUT networking required.
+
+**Topology constraint (decisive).** The MCP server runs on the **lava-master**, which is
+**not** on the workers' lab network: lab → master is allowed, master → lab is not. So the
+master can never open `telnet ser2net …` into the lab. Anything touching ser2net must
+originate **inside the lab and dial out**. In Mode 2 there is no per-job container to
+piggyback on — so the lab-side foothold comes from LAVA's **Test Services** feature.
+
+**LAVA Test Services** (`services:` under a `test` action; impl
+`lava_dispatcher/actions/test/service.py`, schema `lava_common/schemas/test/service.py`):
+a docker-compose project LAVA runs **on the worker** (in the lab), up for the job's
+lifetime (torn down at job end or via the `stop_test_services` command). Networking is
+whatever the compose file declares (`network_mode: host` → reaches lab hosts incl.
+ser2net; outbound works for `ssh -R`); device/job `environment` is written to the
+compose `.env`. **Gated per device by `allow_test_services: true` in the device dict.**
 
 **Design.**
-1. **Boot-ready signal.** The interactive test definition boots the board and, on
-   reaching a known shell prompt, emits `lava-test-case console-ready --result pass`.
-   lava-mcp detects it by polling `get_job_results()` for that test case (reuses
-   existing client code; no signal-stream plumbing needed).
-2. **Endpoint discovery.** Resolve the reserved device's console from LAVA itself:
-   `get_job(job_id)` → `actual_device` (hostname), then
-   `get_device_dictionary(hostname, render=True)` and parse `connection_command`
-   (typically `telnet <host> <port>`) into `(host, port)`.
-3. **New tool** `get_serial_console(session_id)` (gated by the user allowlist **and** a
-   `serial_console_enabled` flag): verify `console-ready`, resolve the ser2net endpoint,
-   then return a connect command. In-lab callers get `telnet <host> <port>` directly;
-   remote callers get a gateway-side TCP proxy (`telnet <gateway-host> <proxy-port>`)
-   that forwards to the ser2net endpoint.
-4. **Console contention** (deployment concern to document): either ser2net is configured
-   for multiple connections (human shares LAVA's console), or the interactive test def
-   idles after signaling ready — reservation held, console released — so the human takes
-   it over. `close_board_session` cancels the job and reclaims it.
+1. **Services proxy container.** The Mode 2 job includes a `services:` block running our
+   ser2net-proxy image. It dials out to the gateway with a per-session key (reusing the
+   Mode 1 connect-script + session model), so it registers as a session and the gateway
+   can exec back into it.
+2. **Boot-ready signal.** The test definition boots the board and, on reaching a known
+   shell prompt, emits `lava-test-case console-ready --result pass`; lava-mcp detects it
+   by polling `get_job_results()`.
+3. **Endpoint discovery + on-demand forward.** lava-mcp resolves the reserved device's
+   console from the LAVA API on the master (`get_job(job_id).actual_device` →
+   `get_device_dictionary(hostname, render=True)` → parse `connection_command`
+   `telnet <host> <port>`), then instructs the services container (over the gateway exec
+   channel) to `ssh -R <console_port>:<ser2net-host>:<ser2net-port>` — the TCP connect to
+   ser2net happens **from the container inside the lab**. Doing it on demand avoids
+   needing the reserved device at job-submit time.
+4. **New tool** `get_serial_console(session_id)` (gated by the user allowlist **and** a
+   `serial_console_enabled` flag): verify `console-ready`, ensure the forward is up,
+   return a connect command via the gateway-local `<console_port>`.
+5. **Console contention.** LAVA holds the console for the whole job; a second connection
+   needs ser2net multi-connection, and interactive *writing* realistically only after the
+   automated actions finish and the board idles (the `console-ready` gate).
 
-**Files.** new `serial console` helpers in `client.py` (parse `connection_command`) and
-`gateway.py` (TCP proxy listener), `server.py` (`get_serial_console`), `jobs.py` /
-`interactive/ssh-gateway.yaml` (emit `console-ready`, optional idle-hold), `config.py` +
-`cmdline.py` (`serial_console_enabled` → `LAVA_MCP_SERIAL_CONSOLE_ENABLED`), README, tests.
+**Device gate + reasonable failure (required).** Before offering/attempting the console,
+lava-mcp must confirm the reserved device's dict has `allow_test_services: true` (parse
+the rendered device dict). If not, return an actionable message — e.g. *"Serial console
+needs `allow_test_services` enabled in the device dictionary for `<hostname>`; it is not
+set, so a console proxy cannot be started. Ask a lab admin to enable it."* — rather than
+submitting a `services` block LAVA will reject. Note this is a **device-dict** gate,
+separate from Mode-1's `allow-remote-access` **tag** gate (already enforced in
+`open_board_session`, see §A/README); a Mode 2 device generally needs both.
 
-**Note.** The session must track the **reserved device hostname**, not just
-`device_type` — looked up from the job once scheduled.
+**Cheap first cut — read-only console, no lab path.** In Mode 2 LAVA already streams the
+console to the master as job logs. A `watch_console(job_id)` tool that tails
+`jobs/<id>/logs/` gives live boot/kernel output to read (no typing) with zero new infra —
+ship this before the interactive bridge.
 
-**Tests.** `connection_command` → `(host, port)` parsing; `console-ready` detection from
-a results payload; tool gated by flag + allowlist; TCP proxy forwards bytes.
+**Files.** `client.py` (parse `connection_command`, device-dict `allow_test_services`
+check, log-tail helper), `server.py` (`get_serial_console`, `watch_console`), `jobs.py`
+(+ a Mode 2 job builder with the `services:` block and `console-ready`), a new
+`interactive/ser2net-proxy/` image + compose, `config.py`/`cmdline.py`
+(`serial_console_enabled` → `LAVA_MCP_SERIAL_CONSOLE_ENABLED`), README, tests.
 
-**Effort.** Medium–high — endpoint discovery + TCP bridge + contention handling.
+**Note.** The session must track the **reserved device hostname**, not just `device_type`
+— looked up from the job once scheduled.
+
+**Open items to confirm on staging before building the interactive tier:**
+- target devices have (or can get) `allow_test_services: true`;
+- the services container can reach the console host (ser2net vs raw `/dev/tty*` on the
+  worker) and dial out to the gateway;
+- ser2net (or LAVA console sharing) permits the concurrent connection.
+
+**Tests.** `connection_command` → `(host, port)` parsing; `allow_test_services` gate +
+its failure message; `console-ready` detection from a results payload; Mode 2 job builder
+emits the `services:` block; log-tail helper.
+
+**Effort.** Read-only tier: low. Interactive tier: high — services image + on-demand
+forward + contention.
 
 ---
 

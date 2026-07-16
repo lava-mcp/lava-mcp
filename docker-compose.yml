@@ -26,6 +26,8 @@ services:
       # optional access control (empty = open); see .env.example
       LAVA_MCP_GATEWAY_ALLOW_IPS: ${LAVA_MCP_GATEWAY_ALLOW_IPS:-}
       LAVA_MCP_GATEWAY_ALLOW_USERS: ${LAVA_MCP_GATEWAY_ALLOW_USERS:-}
+      # device tag required to host remote-access sessions (default allow-remote-access)
+      LAVA_MCP_REMOTE_ACCESS_TAG: ${LAVA_MCP_REMOTE_ACCESS_TAG:-allow-remote-access}
     ports:
       - "2222:2222"   # SSH gateway (TCP) — must be reachable by lab containers
     expose:

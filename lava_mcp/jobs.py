@@ -41,6 +41,12 @@ def build_interactive_job(
         "SESSION_PUBLIC_KEY": session.public_key,
     }
 
+    # Pin the job to devices tagged for remote access, so LAVA will only ever
+    # schedule an interactive session on a device an admin has opted in.
+    job_tags = list(tags or [])
+    if config.remote_access_tag and config.remote_access_tag not in job_tags:
+        job_tags.append(config.remote_access_tag)
+
     job: dict[str, Any] = {
         "device_type": device_type,
         "job_name": f"lava-mcp interactive {session.session_id}",
@@ -69,6 +75,6 @@ def build_interactive_job(
             }
         ],
     }
-    if tags:
-        job["tags"] = tags
+    if job_tags:
+        job["tags"] = job_tags
     return yaml.safe_dump(job, sort_keys=False)

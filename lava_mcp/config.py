@@ -58,6 +58,9 @@ class Config:
     #  - allow_users: LAVA usernames (via whoami) permitted to open board sessions
     gateway_allow_ips: tuple[str, ...] = ()
     gateway_allow_users: tuple[str, ...] = ()
+    # LAVA device tag a device must carry to host interactive/remote-access jobs.
+    # open_board_session requires it and pins the job to it. Empty disables the gate.
+    remote_access_tag: str = "allow-remote-access"
     # interactive session assets (container image + test definition location).
     # Override via LAVA_MCP_INTERACTIVE_* if you host the image/repo elsewhere.
     interactive_image: str = "ghcr.io/mattface/lava-mcp/interactive:latest"
@@ -88,6 +91,9 @@ class Config:
             gateway_advertise_port=int(adv_port) if adv_port else None,
             gateway_allow_ips=_env_list("LAVA_MCP_GATEWAY_ALLOW_IPS"),
             gateway_allow_users=_env_list("LAVA_MCP_GATEWAY_ALLOW_USERS"),
+            remote_access_tag=os.environ.get(
+                "LAVA_MCP_REMOTE_ACCESS_TAG", "allow-remote-access"
+            ),
             interactive_image=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_IMAGE",
                 "ghcr.io/mattface/lava-mcp/interactive:latest",
