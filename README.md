@@ -173,6 +173,34 @@ One line then drops you into the board shell:
 ssh -i lava-session-<id> -p 2222 <session_id>@<gateway-host>
 ```
 
+```mermaid
+sequenceDiagram
+    actor Human
+    participant MCP as lava-mcp + SSH gateway<br/>(bastion)
+    participant Board as Board container<br/>(reverse tunnel already up)
+
+    Note over MCP,Board: session already open — container dialed back,<br/>tunnel live at 127.0.0.1:reverse_port
+
+    Human->>MCP: attach_session(session_id)
+    Note over MCP: mint ephemeral human keypair,<br/>authorize it for this session
+    MCP-->>Human: private key + ready-to-run ssh command
+
+    Human->>MCP: ssh -p 2222 session_id@gateway<br/>(human key, shell channel)
+    Note over MCP: authenticate human key,<br/>allow shell channel only
+    MCP->>Board: open inner SSH over tunnel<br/>(container key), request PTY + shell
+    Board-->>MCP: PTY
+    MCP-->>Human: bridged PTY
+
+    loop live interactive shell
+        Human->>Board: keystrokes (via gateway)
+        Board-->>Human: terminal output (via gateway)
+    end
+
+    Human->>MCP: close_board_session(session_id)
+    Note over MCP: revoke human key
+    MCP->>Board: cancel job (releases the board)
+```
+
 Human keys are per-session and revoked on `close_board_session`; the whole path sits
 behind a `LAVA_MCP_GATEWAY_HUMAN_ENABLED` flag.
 
