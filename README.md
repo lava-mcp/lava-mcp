@@ -83,7 +83,33 @@ lava-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --gateway
 In hosted mode with `--gateway` (or `LAVA_MCP_GATEWAY_ENABLED=true`), the server runs
 an in-process SSH rendezvous. `open_board_session` submits a LAVA job that runs a
 device-attached container; the container dials **out** (`ssh -R`) to the gateway, so
-no inbound access to the worker is needed. Then:
+no inbound access to the worker is needed.
+
+```mermaid
+sequenceDiagram
+    actor Agent as Agent (MCP client)
+    participant MCP as lava-mcp + SSH gateway
+    participant LAVA as LAVA scheduler
+    participant Board as Board container<br/>(on lab worker)
+
+    Agent->>MCP: open_board_session(device_type)
+    Note over MCP: mint per-session ed25519 keypair,<br/>allocate reverse port, create session
+    MCP->>LAVA: submit_job (interactive job,<br/>key + gateway host/port + reverse port)
+    LAVA->>Board: schedule on a worker with the board,<br/>run device-attached container
+    Board->>MCP: ssh -R reverse_port:localhost:22<br/>(auth with session key)
+    Note over MCP: validate key, accept reverse forward,<br/>mark session "connected"
+    MCP-->>Agent: session connected
+
+    Agent->>MCP: run_in_session(session_id, command)
+    MCP->>Board: ssh back through tunnel<br/>(127.0.0.1:reverse_port), run command
+    Board-->>MCP: exit status + stdout/stderr
+    MCP-->>Agent: command output
+
+    Agent->>MCP: close_board_session(session_id)
+    MCP->>LAVA: cancel job (releases the board)
+```
+
+Then:
 
 - `run_in_session(session_id, command)` runs a command on the board's container
   (e.g. `qdl`, `fastboot`, `adb`, shell).
@@ -92,6 +118,63 @@ no inbound access to the worker is needed. Then:
 The container image + test definition live in this repo under `interactive/`
 (published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
 the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
+
+### For humans (without an agent)
+
+The gateway has no dedicated human client — but the board-session tools are just MCP
+calls, so a person can drive the exact same open → run → close flow by hand. Point any
+generic MCP client at the hosted endpoint with your token; no LLM is involved.
+
+The quickest is the [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
+
+```sh
+npx @modelcontextprotocol/inspector
+# In the UI: Transport = Streamable HTTP
+#            URL       = https://<LAVA_MCP_DOMAIN>/mcp
+#            Header    = X-Lava-Token: <your-api-token>
+# (add X-Lava-Url too if the server is multi-tenant)
+```
+
+Then invoke the same tools the agent would:
+
+1. `open_board_session` with `device_type` (e.g. `qcs6490-rb3gen2-core-kit`) — reserves
+   a board, submits the LAVA job, and waits for the container to dial back. The result
+   includes the `session_id` and `connected: true`.
+2. `run_in_session` with that `session_id` and a `command` (`qdl`, `fastboot`, `adb`,
+   any shell) — returns the exit status, stdout and stderr.
+3. `close_board_session` with the `session_id` — cancels the job and frees the board.
+
+This is command-at-a-time execution over the gateway, not a live PTY.
+
+### Interactive SSH shell for humans (planned)
+
+> **Not yet implemented** — this is the design for a real interactive shell over the
+> same gateway. The tool and flags below don't exist yet; tracked on the
+> [roadmap](#roadmap).
+
+The plan is for the gateway to double as an **SSH bastion** so a person gets a live PTY
+on the board without an agent and without ever seeing the container's private key. It
+reuses the one listener already published on `:2222`, telling the two callers apart by
+key and channel:
+
+- the **container** authenticates with its per-session key and may only request the
+  reverse forward (as it does today);
+- a **human** authenticates with a short-lived, per-session key and may only open a
+  shell — which the gateway bridges into the board over the existing reverse tunnel,
+  doing the inner hop with the container key itself.
+
+A person would open a session (`open_board_session`), then call a new
+`attach_session(session_id)` tool. That mints an ephemeral keypair, authorizes it for
+the session, and returns the private key plus a ready-to-run command over the
+already-authenticated MCP/HTTPS channel — the container key never leaves the server.
+One line then drops you into the board shell:
+
+```sh
+ssh -i lava-session-<id> -p 2222 <session_id>@<gateway-host>
+```
+
+Human keys are per-session and revoked on `close_board_session`; the whole path sits
+behind a `LAVA_MCP_GATEWAY_HUMAN_ENABLED` flag.
 
 ## Configuration
 
