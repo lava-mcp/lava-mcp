@@ -74,10 +74,6 @@ actions:
     method: qdl
     namespace: qdl
 
-- command:
-    name: network_turn_on
-    namespace: qdl
-
 - boot:
     auto_login:
       login_prompt: 'login:'
@@ -113,7 +109,3 @@ actions:
           - lava-test-case console-ready --result pass
           - echo "LAVA_MCP_CONSOLE_WRITABLE"
           - 'for i in $(seq 1 80); do echo "console-hold tick $i"; sleep 30; done'
-
-- command:
-    name: stop_test_services
-    namespace: console
