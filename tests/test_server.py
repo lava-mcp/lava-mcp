@@ -9,6 +9,7 @@ from lava_mcp.server import (
     _enforce_user_allowlist,
     _lava_username,
     _require_remote_access_device,
+    _require_test_services_device,
     build_server,
 )
 
@@ -24,6 +25,16 @@ class _FakeDevicesClient:
         self.calls.append({"limit": limit, **filters})
         results = [{"hostname": f"d{i}"} for i in range(self._count)]
         return {"count": self._count, "results": results}
+
+
+class _FakeServicesClient:
+    """Stub LavaClient exposing allows_test_services for the console-gate tests."""
+
+    def __init__(self, allowed: bool) -> None:
+        self._allowed = allowed
+
+    def allows_test_services(self, hostname: str) -> bool:
+        return self._allowed
 
 
 def tool_names(read_only: bool) -> set[str]:
@@ -76,6 +87,15 @@ def test_require_remote_access_device_noop_when_gate_disabled() -> None:
     client = _FakeDevicesClient(count=0)
     _require_remote_access_device(client, "qcs6490", "")  # empty tag disables the gate
     assert client.calls == []
+
+
+def test_require_test_services_device_passes_when_allowed() -> None:
+    _require_test_services_device(_FakeServicesClient(allowed=True), "rb3g2-01")
+
+
+def test_require_test_services_device_raises_when_disabled() -> None:
+    with pytest.raises(PermissionError, match="allow_test_services"):
+        _require_test_services_device(_FakeServicesClient(allowed=False), "rb3g2-01")
 
 
 def test_enforce_user_allowlist() -> None:

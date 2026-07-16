@@ -3,8 +3,30 @@ from __future__ import annotations
 import pytest
 import responses
 
-from lava_mcp.client import LavaClient, LavaError, client_from
+from lava_mcp.client import (
+    LavaClient,
+    LavaError,
+    client_from,
+    device_dict_allows_test_services,
+)
 from lava_mcp.config import Config
+
+
+def test_device_dict_allows_test_services() -> None:
+    assert device_dict_allows_test_services(
+        "parameters:\n  allow_test_services: True\n"
+    )
+    # lowercase yaml bool is fine (both parse to Python True)
+    assert device_dict_allows_test_services(
+        "parameters:\n  allow_test_services: true\n"
+    )
+    # explicitly disabled, absent, or no parameters block → not allowed
+    assert not device_dict_allows_test_services(
+        "parameters:\n  allow_test_services: false\n"
+    )
+    assert not device_dict_allows_test_services("parameters:\n  interfaces: {}\n")
+    assert not device_dict_allows_test_services("actions: {}\n")
+    assert not device_dict_allows_test_services("")
 
 
 def test_client_from_pins_configured_url_but_uses_client_token() -> None:
@@ -128,6 +150,25 @@ def test_anonymous_dashboard_no_auth_header() -> None:
     responses.get(BASE + "dashboard/queue/", json={"count": 0, "results": []})
     client.dashboard_queue()
     assert "Authorization" not in responses.calls[0].request.headers
+
+
+@responses.activate
+def test_allows_test_services_reads_device_dictionary(client: LavaClient) -> None:
+    responses.get(
+        BASE + "devices/rb3g2-01/dictionary/",
+        body="parameters:\n  allow_test_services: True\n",
+    )
+    assert client.allows_test_services("rb3g2-01") is True
+    assert responses.calls[0].request.params == {"render": "true"}
+
+
+@responses.activate
+def test_allows_test_services_false_when_unset(client: LavaClient) -> None:
+    responses.get(
+        BASE + "devices/rb3g2-02/dictionary/",
+        body="parameters:\n  interfaces: {}\n",
+    )
+    assert client.allows_test_services("rb3g2-02") is False
 
 
 @responses.activate

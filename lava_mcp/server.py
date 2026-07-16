@@ -65,6 +65,21 @@ def _require_remote_access_device(
         )
 
 
+def _require_test_services_device(client: LavaClient, hostname: str) -> None:
+    """Ensure ``hostname`` opts into LAVA Test Services, needed for the serial console.
+
+    The console proxy runs as a Test Services container on the worker, which LAVA only
+    permits on devices whose dictionary sets ``allow_test_services: true``. Fail with an
+    actionable message rather than submitting a job LAVA would reject at validation.
+    """
+    if not client.allows_test_services(hostname):
+        raise PermissionError(
+            f"Serial console needs 'allow_test_services' enabled in the device "
+            f"dictionary for {hostname!r}, but it is not set — a console proxy cannot "
+            "be started on this device. Ask a lab admin to enable it."
+        )
+
+
 def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 

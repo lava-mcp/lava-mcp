@@ -125,6 +125,16 @@ class LavaClient:
             "boot_methods": sorted(boot.keys()),
         }
 
+    def allows_test_services(self, hostname: str) -> bool:
+        """True if the device opts into LAVA Test Services (``allow_test_services``).
+
+        Needed for the serial-console proxy, which runs as a Test Services container
+        on the worker; LAVA only permits that on opted-in devices.
+        """
+        return device_dict_allows_test_services(
+            self.get_device_dictionary(hostname, render=True)
+        )
+
     def list_device_types(self, limit: int = 100, **filters: Any) -> dict[str, Any]:
         return self._list("devicetypes/", limit, **filters)
 
@@ -177,6 +187,19 @@ class LavaClient:
 
     def resubmit_job(self, job_id: int | str) -> Any:
         return _maybe_json(self._request("POST", f"jobs/{job_id}/resubmit/"))
+
+
+def device_dict_allows_test_services(dict_text: str) -> bool:
+    """True if a rendered device dictionary sets ``parameters.allow_test_services``.
+
+    Mirrors LAVA's own gate (dispatcher requires the value to be exactly ``True``),
+    so a positive result here means a Test Services container will be accepted.
+    """
+    data = yaml.safe_load(dict_text) or {}
+    if not isinstance(data, dict):
+        return False
+    params = data.get("parameters") or {}
+    return isinstance(params, dict) and params.get("allow_test_services") is True
 
 
 def _clean(params: dict[str, Any] | None) -> dict[str, Any] | None:

@@ -117,14 +117,17 @@ compose `.env`. **Gated per device by `allow_test_services: true` in the device 
    needs ser2net multi-connection, and interactive *writing* realistically only after the
    automated actions finish and the board idles (the `console-ready` gate).
 
-**Device gate + reasonable failure (required).** Before offering/attempting the console,
-lava-mcp must confirm the reserved device's dict has `allow_test_services: true` (parse
-the rendered device dict). If not, return an actionable message — e.g. *"Serial console
-needs `allow_test_services` enabled in the device dictionary for `<hostname>`; it is not
-set, so a console proxy cannot be started. Ask a lab admin to enable it."* — rather than
-submitting a `services` block LAVA will reject. Note this is a **device-dict** gate,
-separate from Mode-1's `allow-remote-access` **tag** gate (already enforced in
-`open_board_session`, see §A/README); a Mode 2 device generally needs both.
+**Device gate + reasonable failure — primitive built.** The `allow_test_services`
+check is implemented and tested ahead of the tool: `client.allows_test_services(host)`
+(parses `parameters.allow_test_services` from the rendered device dict, mirroring LAVA's
+strict `is True`) and `server._require_test_services_device(client, host)`, which raises
+an actionable `PermissionError` (*"Serial console needs 'allow_test_services' enabled in
+the device dictionary for `<host>` … Ask a lab admin to enable it."*). Wiring: once
+`get_serial_console` resolves the reserved device from the job, call this gate **before**
+submitting the `services` block, so we never submit a job LAVA would reject at
+validation. This is a **device-dict** gate, separate from Mode-1's `allow-remote-access`
+**tag** gate (enforced in `open_board_session`, see §A/README); a Mode 2 device generally
+needs both.
 
 **Cheap first cut — read-only console, no lab path.** In Mode 2 LAVA already streams the
 console to the master as job logs. A `watch_console(job_id)` tool that tails
