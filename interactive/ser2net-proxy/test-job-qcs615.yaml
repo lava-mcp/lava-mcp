@@ -25,6 +25,15 @@ context:
   lava_test_results_dir: /home/lava-%s
   test_character_delay: 10
 
+# Config for the ser2net-proxy Test Services container. LAVA writes these into the
+# compose .env (merged with the device's environment), so they override the compose
+# defaults. SER2NET_NETWORK is the external Docker network the console server sits on
+# (used by docker-compose.yml); it is ignored by the host-networking variant.
+environment:
+  SER2NET_NETWORK: lava-dispatcher_default
+  SER2NET_HOST: ser2net
+  SER2NET_PORT: "7095"
+
 actions:
 - deploy:
     rootfs_image: "core-image-base-qcs615-ride/rootfs.img"
@@ -68,6 +77,8 @@ actions:
 
 # Start the ser2net console proxy as a LAVA Test Services container on the worker.
 # Needs `allow_test_services: true` in the device dict (set on qcs615-adp-air-04).
+# path selects the network mode: docker-compose.yml joins the external Docker network
+# named by SER2NET_NETWORK (default); docker-compose.host.yml uses host networking.
 - test:
     namespace: qdl
     timeout:

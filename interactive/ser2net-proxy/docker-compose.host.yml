@@ -1,0 +1,31 @@
+# Host-networking variant of the ser2net-proxy Test Services container.
+#
+# Use this when the board's console server is reachable on the LAVA worker's own
+# network — a real DNS/hosts name or a host-published port — rather than via a Docker
+# network. Select it by pointing the job's services `path` at this file. The
+# external-network (default) variant is docker-compose.yml.
+#
+# Overridable via the job/device `environment` (LAVA writes it to the compose .env):
+#   SER2NET_HOST   console server hostname reachable from the worker host
+#   SER2NET_PORT   console server port
+services:
+  ser2net-proxy:
+    image: alpine:3.20
+    network_mode: host
+    environment:
+      SER2NET_HOST: ${SER2NET_HOST:-ser2net}
+      SER2NET_PORT: ${SER2NET_PORT:-7095}
+    command:
+      - sh
+      - -c
+      - |
+        apk add --no-cache netcat-openbsd >/dev/null 2>&1 || true
+        echo "ser2net-proxy: probing $$SER2NET_HOST:$$SER2NET_PORT via host networking"
+        while true; do
+          if nc -z -w2 "$$SER2NET_HOST" "$$SER2NET_PORT"; then
+            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT reachable"
+          else
+            echo "ser2net-proxy: $$SER2NET_HOST:$$SER2NET_PORT UNREACHABLE"
+          fi
+          sleep 15
+        done
