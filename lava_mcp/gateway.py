@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import socket
 import threading
 import time
@@ -31,6 +32,8 @@ from typing import Any
 import asyncssh
 
 from .config import Config
+
+logger = logging.getLogger("lava_mcp.gateway")
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 
@@ -188,8 +191,15 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         peer = conn.get_extra_info("peername")
         ip = peer[0] if peer else ""
         self._allowed = ip_allowed(ip, self._allow_networks)
-        if not self._allowed:
+        if self._allowed:
+            logger.info("gateway: accepted connection from %s", ip)
+        else:
             # drop connections from outside the gateway IP allowlist before auth
+            logger.warning(
+                "gateway: REJECTED connection from %s (not in allowlist %s)",
+                ip,
+                ",".join(str(n) for n in self._allow_networks) or "<empty>",
+            )
             conn.close()
 
     def begin_auth(self, username: str) -> bool:

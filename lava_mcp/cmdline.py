@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 from collections.abc import Sequence
 from typing import Literal, cast
@@ -12,6 +14,13 @@ from .server import build_server
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Send lava-mcp logs (incl. the gateway's connection accept/reject lines) to
+    # stderr so they appear in `docker logs`. Level via LAVA_MCP_LOG_LEVEL.
+    logging.basicConfig(
+        level=os.environ.get("LAVA_MCP_LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     parser = argparse.ArgumentParser(
         prog="lava-mcp",
         description="MCP server exposing a LAVA instance to agents.",
