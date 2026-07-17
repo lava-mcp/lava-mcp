@@ -44,6 +44,11 @@ job). The **serial console** (`attach_console`) is the same forward to the conso
 - **Source-IP allowlist** — `LAVA_MCP_GATEWAY_ALLOW_IPS` drops connections before auth,
   for agents and humans alike. Empty = open (a startup warning is logged); set it to the
   lab egress plus any human/VPN ranges.
+- **Split tool allowlists** — the general LAVA-proxy tools are ungated (equal to a LAVA
+  token). Interactive tools are gated by LAVA username (via `whoami`):
+  `LAVA_MCP_HTTP_ALLOW_USERS` for the "use" tools (open/run/close/list/console-open) and
+  `LAVA_MCP_SSH_ALLOW_USERS` for the "attach" tools that hand out SSH/gateway keys. So
+  granting a live shell/console can be restricted more tightly than driving sessions.
 - **Per-session key auth** — only the session's agent key or a live human key for that
   session authenticates; unknown keys are rejected.
 - **Ephemeral, expiring human keys** — `attach_*` mints a per-session key valid for

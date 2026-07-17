@@ -141,15 +141,16 @@ def build_server(config: Config) -> FastMCP:
         headers = request.headers if request is not None else None
         return client_from(config, headers)
 
-    def require_session_user() -> str:
-        """Resolve the caller's LAVA user and enforce the gateway username allowlist.
+    def require_user(allow: tuple[str, ...]) -> str:
+        """Resolve the caller's LAVA user (via whoami) and enforce ``allow``.
 
-        Discovers the username with the ``whoami`` API (the caller's own token) and
-        raises ``PermissionError`` when ``gateway_allow_users`` is set and excludes
-        them. Returns the resolved username (empty string if none reported).
+        Discovers the username with the caller's own token and raises
+        ``PermissionError`` when ``allow`` is set and excludes them. Returns the
+        resolved username (empty string if none reported). General LAVA-proxy tools
+        do not call this — they are open to any token holder.
         """
         username = _lava_username(client().whoami())
-        _enforce_user_allowlist(username, config.gateway_allow_users)
+        _enforce_user_allowlist(username, allow)
         return username or ""
 
     # -- system / identity -------------------------------------------------
@@ -327,7 +328,7 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds for the container to connect, then the session is usable
             via run_in_session.
             """
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             _require_remote_access_device(
                 client(), device_type, config.remote_access_tag
             )
@@ -356,7 +357,7 @@ def build_server(config: Config) -> FastMCP:
             session_id: str, command: str, timeout: int = 120
         ) -> Any:
             """Run a shell command inside an open board session, returning output."""
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             session = gateway.manager.get(session_id)
             if session is None:
                 return {"error": f"unknown session {session_id}"}
@@ -369,7 +370,7 @@ def build_server(config: Config) -> FastMCP:
         @mcp.tool()
         async def close_board_session(session_id: str) -> Any:
             """Close a board session and cancel its LAVA job (releases the board)."""
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             session = gateway.manager.get(session_id)
             if session is None:
                 return {"closed": False, "reason": "unknown session"}
@@ -384,7 +385,7 @@ def build_server(config: Config) -> FastMCP:
         @mcp.tool()
         async def list_board_sessions() -> Any:
             """List the interactive board sessions you own."""
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             await asyncio.to_thread(gateway.ensure_started)
             return [
                 s.public_view()
@@ -401,7 +402,7 @@ def build_server(config: Config) -> FastMCP:
             gateway into the container's shell. The container's own key is never
             disclosed; the gateway itself offers no shell.
             """
-            user = require_session_user()
+            user = require_user(config.ssh_allow_users)
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.get(session_id)
             if session is None:
@@ -452,6 +453,7 @@ def build_server(config: Config) -> FastMCP:
             The proxy runs as a LAVA Test Services container, which LAVA only allows on
             devices whose dictionary sets ``allow_test_services: true``.
             """
+            require_user(config.http_allow_users)
             allowed = client().allows_test_services(hostname)
             return {
                 "hostname": hostname,
@@ -476,7 +478,7 @@ def build_server(config: Config) -> FastMCP:
             the ``SER2NET_*`` vars for your device. Once the job boots and the proxy
             connects, call ``attach_console(session_id)`` for a connect command.
             """
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.create(
                 device_type=device_type, kind="console", owner=user
@@ -507,7 +509,7 @@ def build_server(config: Config) -> FastMCP:
             The board/proxy key is never disclosed. The console is read-only until the
             job emits console-ready.
             """
-            user = require_session_user()
+            user = require_user(config.ssh_allow_users)
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.get(session_id)
             if session is None:
@@ -535,7 +537,7 @@ def build_server(config: Config) -> FastMCP:
         @mcp.tool()
         async def close_console_session(session_id: str) -> Any:
             """Close a serial-console session and revoke its human keys."""
-            user = require_session_user()
+            user = require_user(config.http_allow_users)
             session = gateway.manager.get(session_id)
             if session is None:
                 return {"closed": False, "reason": "unknown session"}

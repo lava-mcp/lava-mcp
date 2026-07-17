@@ -61,11 +61,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Restrict gateway SSH connections to this IP/CIDR (repeatable).",
     )
     parser.add_argument(
-        "--gateway-allow-user",
+        "--http-allow-user",
         action="append",
         default=None,
         metavar="USERNAME",
-        help="Restrict interactive board sessions to this LAVA user (repeatable).",
+        help="Restrict the interactive 'use' tools to this LAVA user (repeatable).",
+    )
+    parser.add_argument(
+        "--ssh-allow-user",
+        action="append",
+        default=None,
+        metavar="USERNAME",
+        help="Restrict the 'attach' (SSH/console) tools to this LAVA user (repeatable).",
     )
     parser.add_argument(
         "--remote-access-tag",
@@ -99,8 +106,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.gateway_advertise_host = args.gateway_advertise_host
     if args.gateway_allow_ip:
         config.gateway_allow_ips = tuple(args.gateway_allow_ip)
-    if args.gateway_allow_user:
-        config.gateway_allow_users = tuple(args.gateway_allow_user)
+    if args.http_allow_user:
+        config.http_allow_users = tuple(args.http_allow_user)
+    if args.ssh_allow_user:
+        config.ssh_allow_users = tuple(args.ssh_allow_user)
     if args.remote_access_tag is not None:
         config.remote_access_tag = args.remote_access_tag
 

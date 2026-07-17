@@ -119,16 +119,19 @@ The container image + test definition live in this repo under `interactive/`
 (published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
 the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 
-Two optional allowlists gate the gateway (both default to open):
+Optional allowlists gate the interactive features (all default to open). The general
+LAVA-proxy tools are **never** gated here — they are equivalent to using your own LAVA
+token, so `/mcp` is usable by any token holder.
 
 - `LAVA_MCP_GATEWAY_ALLOW_IPS` — comma/space-separated IPs or CIDRs permitted to
   connect to the SSH gateway on `:2222`. It applies to **every** connection — in-job
-  containers and (once human SSH access lands) people alike — dropped before
-  authentication. Set it to your lab worker network so only in-job containers can dial
-  in; to allow remote humans as well, add their source range (e.g. the VPN/office CIDR).
-- `LAVA_MCP_GATEWAY_ALLOW_USERS` — comma/space-separated LAVA usernames permitted to
-  use the board-session tools. The server discovers the caller's identity from their
-  token via the `whoami` API and rejects anyone off the list.
+  containers and humans alike — dropped before authentication. Set it to your lab worker
+  network plus any human/VPN source ranges.
+- `LAVA_MCP_HTTP_ALLOW_USERS` — LAVA users (via `whoami`) allowed the interactive *use*
+  tools: `open_board_session`, `run_in_session`, `close_*`, `list_*`,
+  `open_console_session`, `check_serial_console_support`.
+- `LAVA_MCP_SSH_ALLOW_USERS` — users allowed the *attach* tools that hand out gateway/SSH
+  keys: `attach_shell`, `attach_console`.
 
 Interactive sessions are also gated **per device**: they only run on devices an admin
 has opted in by tagging with `allow-remote-access` (override the tag name with
@@ -279,7 +282,8 @@ test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
 | `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | SSH gateway port (default 2222) |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
 | `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
-| `LAVA_MCP_GATEWAY_ALLOW_USERS` | `--gateway-allow-user` | LAVA usernames allowed to open board sessions (empty = all) |
+| `LAVA_MCP_HTTP_ALLOW_USERS` | `--http-allow-user` | LAVA users allowed the interactive 'use' tools (empty = all) |
+| `LAVA_MCP_SSH_ALLOW_USERS` | `--ssh-allow-user` | LAVA users allowed the 'attach' (SSH/console) tools (empty = all) |
 | `LAVA_MCP_REMOTE_ACCESS_TAG` | `--remote-access-tag` | Device tag required to host remote-access sessions (empty = no gate) |
 | `LAVA_MCP_GATEWAY_HUMAN_KEY_TTL` | — | Lifetime (seconds) of an ephemeral human access key from `attach_*` (default 3600) |
 

@@ -105,6 +105,14 @@ def test_require_test_services_device_raises_when_disabled() -> None:
         _require_test_services_device(_FakeServicesClient(allowed=False), "rb3g2-01")
 
 
+def test_config_reads_split_user_allowlists(monkeypatch) -> None:
+    monkeypatch.setenv("LAVA_MCP_HTTP_ALLOW_USERS", "alice, bob")
+    monkeypatch.setenv("LAVA_MCP_SSH_ALLOW_USERS", "alice")
+    cfg = Config.from_env()
+    assert cfg.http_allow_users == ("alice", "bob")
+    assert cfg.ssh_allow_users == ("alice",)
+
+
 def test_require_owner_enforces_session_ownership() -> None:
     _require_owner(_OwnedSession("alice"), "alice")  # owner ok
     _require_owner(_OwnedSession(None), "alice")  # unowned (legacy) ok

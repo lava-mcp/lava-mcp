@@ -8,7 +8,8 @@ Status legend: 🟢 shipped · 🟡 planned (design agreed) · 🔵 proposed (no
 
 Shipped foundation (for reference): the SSH rendezvous gateway, `open_board_session` /
 `run_in_session` / `close_board_session` / `list_board_sessions`, the gateway
-access-control allowlists (`LAVA_MCP_GATEWAY_ALLOW_IPS`, `LAVA_MCP_GATEWAY_ALLOW_USERS`),
+access-control allowlists (`LAVA_MCP_GATEWAY_ALLOW_IPS`, and the split user lists
+`LAVA_MCP_HTTP_ALLOW_USERS` / `LAVA_MCP_SSH_ALLOW_USERS`),
 and the per-device `allow-remote-access` **tag** gate (`LAVA_MCP_REMOTE_ACCESS_TAG`):
 `open_board_session` fails fast if no device of the type carries the tag, and every
 interactive job is pinned to it so LAVA only schedules on a permitted device.
