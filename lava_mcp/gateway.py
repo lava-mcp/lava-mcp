@@ -219,28 +219,53 @@ class _GatewaySSHServer(asyncssh.SSHServer):
         # the dial-out agent (board container / console proxy) holds the session key
         if _key_matches(key, session.public_key):
             self._role = "agent"
+            logger.info("gateway: key auth OK for %s (role=agent)", username)
             return True
         # a human attached to the session holds a short-lived, non-expired key
         if any(_key_matches(key, pub) for pub in session.active_human_keys()):
             self._role = "human"
+            logger.info("gateway: key auth OK for %s (role=human)", username)
             return True
+        logger.warning("gateway: key auth FAILED for %s (no matching key)", username)
         return False
 
     def server_requested(self, listen_host: str, listen_port: int) -> bool:
         # The dial-out agent requests `ssh -R <reverse_port>:localhost:<svc>`. Only the
         # agent role may reverse-forward, and only the port we pre-allocated.
         if not self._allowed or self._role != "agent" or self._session is None:
+            logger.warning(
+                "gateway: reverse-forward denied (allowed=%s role=%s session=%s)",
+                self._allowed,
+                self._role,
+                self._session.session_id if self._session else None,
+            )
             return False
         if listen_port != self._session.reverse_port:
+            logger.warning(
+                "gateway: reverse-forward denied for %s: port %s != expected %s",
+                self._session.session_id,
+                listen_port,
+                self._session.reverse_port,
+            )
             return False
         # SECURITY (critical): only ever bind the reverse tunnel to loopback. asyncssh
         # binds to the client-requested host, and an empty/0.0.0.0 request would expose
         # the tunnelled lab service on the master with NO SSH auth and NO IP allowlist.
         # Reachable only from the master itself -> only via an authenticated human -W.
         if listen_host not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                "gateway: reverse-forward denied for %s: non-loopback bind %r",
+                self._session.session_id,
+                listen_host,
+            )
             return False
         self._session.status = "connected"
         self._session._connected.set()
+        logger.info(
+            "gateway: reverse-forward established for %s on 127.0.0.1:%s (CONNECTED)",
+            self._session.session_id,
+            listen_port,
+        )
         return True
 
     def connection_requested(

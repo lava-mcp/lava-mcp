@@ -16,10 +16,19 @@ from .server import build_server
 def main(argv: Sequence[str] | None = None) -> int:
     # Send lava-mcp logs (incl. the gateway's connection accept/reject lines) to
     # stderr so they appear in `docker logs`. Level via LAVA_MCP_LOG_LEVEL.
+    level = os.environ.get("LAVA_MCP_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        level=os.environ.get("LAVA_MCP_LOG_LEVEL", "INFO").upper(),
+        level=level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # asyncssh keeps its own logger quiet by default; align it so gateway SSH
+    # events (auth, port-forward decisions) surface in the same stream.
+    try:
+        import asyncssh
+
+        asyncssh.set_log_level(level)
+    except Exception:  # never let logging setup break startup
+        pass
 
     parser = argparse.ArgumentParser(
         prog="lava-mcp",
