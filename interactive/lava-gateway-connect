@@ -26,14 +26,29 @@ mkdir -p /run/sshd
 echo "lava-mcp: dialing gateway ${GATEWAY_HOST}:${GATEWAY_PORT} as ${SESSION_ID}" \
      "(reverse ${REVERSE_PORT} -> localhost:22)"
 
-# Keep the tunnel up for the life of the job (autossh reconnects on drop).
-exec autossh -M 0 -N \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -o ExitOnForwardFailure=yes \
-    -i /root/.ssh/session_key \
-    -R "127.0.0.1:${REVERSE_PORT}:localhost:22" \
-    -p "${GATEWAY_PORT}" \
-    "${SESSION_ID}@${GATEWAY_HOST}"
+# Keep the tunnel up for the life of the job. AUTOSSH_GATETIME=0 stops autossh from
+# giving up when ssh exits quickly (e.g. gateway not ready yet / ExitOnForwardFailure),
+# so it keeps reconnecting. A bounded outer loop retries a few times if autossh itself
+# exits, then fails the job cleanly rather than hanging until the job timeout.
+export AUTOSSH_GATETIME=0
+attempt=0
+max_attempts="${GATEWAY_CONNECT_ATTEMPTS:-10}"
+while [ "$attempt" -lt "$max_attempts" ]; do
+    attempt=$((attempt + 1))
+    echo "lava-mcp: gateway connect attempt ${attempt}/${max_attempts}"
+    autossh -M 0 -N \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ServerAliveInterval=30 \
+        -o ServerAliveCountMax=3 \
+        -o ConnectTimeout=15 \
+        -o ExitOnForwardFailure=yes \
+        -i /root/.ssh/session_key \
+        -R "127.0.0.1:${REVERSE_PORT}:localhost:22" \
+        -p "${GATEWAY_PORT}" \
+        "${SESSION_ID}@${GATEWAY_HOST}"
+    echo "lava-mcp: gateway connection exited (attempt ${attempt}), retrying in 5s"
+    sleep 5
+done
+echo "lava-mcp: giving up after ${max_attempts} gateway connect attempts" >&2
+exit 1
