@@ -35,6 +35,9 @@ def build_interactive_job(
     parameters = {
         "GATEWAY_HOST": gateway_host,
         "GATEWAY_PORT": str(gateway_port),
+        # When set, the container tunnels its ssh -R over this wss:// URL (443, via
+        # Caddy) instead of dialling GATEWAY_PORT directly.
+        "GATEWAY_WS_URL": config.gateway_ws_url,
         "SESSION_ID": session.session_id,
         "REVERSE_PORT": str(session.reverse_port),
         "SESSION_PRIVATE_KEY": session.private_key,

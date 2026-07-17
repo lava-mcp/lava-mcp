@@ -57,7 +57,9 @@ def _require_remote_access_device(
     """
     if not tag:
         return
-    result = client.list_devices(device_type=device_type, limit=1, **{"tags__name": tag})
+    result = client.list_devices(
+        device_type=device_type, limit=1, **{"tags__name": tag}
+    )
     count = result.get("count")
     if count is None:
         count = len(result.get("results") or [])
@@ -93,9 +95,7 @@ def _require_owner(session: Any, username: str) -> None:
     """
     owner = getattr(session, "owner", None)
     if owner is not None and owner != username:
-        raise PermissionError(
-            f"session {session.session_id} belongs to another user"
-        )
+        raise PermissionError(f"session {session.session_id} belongs to another user")
 
 
 def build_server(config: Config) -> FastMCP:
@@ -427,23 +427,55 @@ def build_server(config: Config) -> FastMCP:
             if push.get("exit_status") not in (0, None):
                 return {"error": "failed to authorise key in container", "detail": push}
             key_file = f"lava-shell-{session_id}.key"
-            ssh = (
-                f"ssh -i {key_file} -o StrictHostKeyChecking=no "
-                f"-o UserKnownHostsFile=/dev/null "
-                f"-o ProxyJump={session_id}@{info['gateway_host']}:{info['gateway_port']} "
-                f"-p {info['reverse_port']} {session.container_user}@127.0.0.1"
-            )
-            return {
+            ws_url = info.get("gateway_ws_url")
+            result: dict[str, Any] = {
                 "session_id": session_id,
                 "private_key": info["private_key"],
-                "ssh_command": ssh,
                 "expires_in": info["expires_in"],
-                "note": (
-                    f"save private_key to {key_file} (chmod 600), then run ssh_command "
-                    "for a shell. Your source IP must be inside "
-                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                ),
             }
+            if ws_url:
+                # Tunnel the jump-host hop over wss:// (443) via websocat. An ssh
+                # config keeps the nested ProxyJump + ProxyCommand readable;
+                # `ssh -F <conf> board` gives the shell.
+                conf_file = f"lava-shell-{session_id}.conf"
+                config_text = (
+                    f"Host gw-{session_id}\n"
+                    f"    User {session_id}\n"
+                    f"    IdentityFile {key_file}\n"
+                    f"    ProxyCommand websocat -b {ws_url}\n"
+                    f"    StrictHostKeyChecking no\n"
+                    f"    UserKnownHostsFile /dev/null\n"
+                    f"Host board-{session_id}\n"
+                    f"    HostName 127.0.0.1\n"
+                    f"    Port {info['reverse_port']}\n"
+                    f"    User {session.container_user}\n"
+                    f"    IdentityFile {key_file}\n"
+                    f"    ProxyJump gw-{session_id}\n"
+                    f"    StrictHostKeyChecking no\n"
+                    f"    UserKnownHostsFile /dev/null\n"
+                )
+                result["ssh_config"] = config_text
+                result["ssh_command"] = f"ssh -F {conf_file} board-{session_id}"
+                result["note"] = (
+                    f"save private_key to {key_file} (chmod 600) and ssh_config to "
+                    f"{conf_file}, then run ssh_command for a shell. Requires "
+                    "`websocat` on your PATH. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                )
+            else:
+                result["ssh_command"] = (
+                    f"ssh -i {key_file} -o StrictHostKeyChecking=no "
+                    f"-o UserKnownHostsFile=/dev/null "
+                    f"-o ProxyJump={session_id}@{info['gateway_host']}:"
+                    f"{info['gateway_port']} "
+                    f"-p {info['reverse_port']} {session.container_user}@127.0.0.1"
+                )
+                result["note"] = (
+                    f"save private_key to {key_file} (chmod 600), then run "
+                    "ssh_command for a shell. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                )
+            return result
 
         # -- serial console (Mode 2: ser2net proxy via LAVA Test Services) ----
         @mcp.tool()
@@ -494,6 +526,8 @@ def build_server(config: Config) -> FastMCP:
                 "job_environment": {
                     "GATEWAY_HOST": advertise_host,
                     "GATEWAY_PORT": str(advertise_port),
+                    # tunnel the console dial-out over wss:// (443) when configured
+                    "GATEWAY_WS_URL": config.gateway_ws_url,
                     "SESSION_ID": session.session_id,
                     "REVERSE_PORT": str(session.reverse_port),
                     "SESSION_PRIVATE_KEY_B64": key_b64,
@@ -519,10 +553,28 @@ def build_server(config: Config) -> FastMCP:
                 return {"error": f"session {session_id} is not a console session"}
             info = gateway.attach_human(session_id)
             key_file = f"lava-console-{session_id}.key"
-            ssh = (
-                f"ssh -i {key_file} -p {info['gateway_port']} "
-                f"-W 127.0.0.1:{info['reverse_port']} {session_id}@{info['gateway_host']}"
-            )
+            ws_url = info.get("gateway_ws_url")
+            if ws_url:
+                # tunnel the gateway hop over wss:// (443) via websocat ProxyCommand
+                ssh = (
+                    f"ssh -i {key_file} -o StrictHostKeyChecking=no "
+                    f"-o UserKnownHostsFile=/dev/null "
+                    f"-o 'ProxyCommand=websocat -b {ws_url}' "
+                    f"-W 127.0.0.1:{info['reverse_port']} {session_id}@{info['gateway_host']}"
+                )
+                note = (
+                    "Requires `websocat` on your PATH. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                )
+            else:
+                ssh = (
+                    f"ssh -i {key_file} -p {info['gateway_port']} "
+                    f"-W 127.0.0.1:{info['reverse_port']} "
+                    f"{session_id}@{info['gateway_host']}"
+                )
+                note = (
+                    "Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                )
             return {
                 "session_id": session_id,
                 "private_key": info["private_key"],
@@ -531,7 +583,7 @@ def build_server(config: Config) -> FastMCP:
                     f"# save private_key to {key_file} (chmod 600), then for a raw "
                     f"console:\nsocat -,raw,echo=0,escape=0x1d 'EXEC:{ssh},pty'"
                 ),
-                "note": "Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set.",
+                "note": note,
             }
 
         @mcp.tool()

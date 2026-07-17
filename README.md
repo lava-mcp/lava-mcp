@@ -281,6 +281,8 @@ test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
 | `LAVA_MCP_GATEWAY_ENABLED` | `--gateway` | Enable interactive SSH board-session gateway |
 | `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | SSH gateway port (default 2222) |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
+| `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | Advertised `wss://host/gateway-ssh` URL; carries the gateway SSH over WebSocket/TLS via Caddy (requires `websocat` on clients). Empty = direct dial |
+| `LAVA_MCP_GATEWAY_WS_PORT` | — | Bridge listen port Caddy proxies `/gateway-ssh` to (default 8022) |
 | `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
 | `LAVA_MCP_HTTP_ALLOW_USERS` | `--http-allow-user` | LAVA users allowed the interactive 'use' tools (empty = all) |
 | `LAVA_MCP_SSH_ALLOW_USERS` | `--ssh-allow-user` | LAVA users allowed the 'attach' (SSH/console) tools (empty = all) |

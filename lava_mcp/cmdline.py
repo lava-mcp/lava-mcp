@@ -79,6 +79,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Restrict gateway SSH connections to this IP/CIDR (repeatable).",
     )
     parser.add_argument(
+        "--gateway-ws-url",
+        default=None,
+        metavar="URL",
+        help="Advertised wss:// URL for the SSH gateway's WebSocket transport "
+        "(e.g. wss://host/gateway-ssh).",
+    )
+    parser.add_argument(
         "--http-allow-user",
         action="append",
         default=None,
@@ -124,6 +131,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         config.gateway_advertise_host = args.gateway_advertise_host
     if args.gateway_allow_ip:
         config.gateway_allow_ips = tuple(args.gateway_allow_ip)
+    if args.gateway_ws_url is not None:
+        config.gateway_ws_url = args.gateway_ws_url
     if args.http_allow_user:
         config.http_allow_users = tuple(args.http_allow_user)
     if args.ssh_allow_user:

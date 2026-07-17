@@ -13,6 +13,7 @@ from lava_mcp.gateway import (
     Gateway,
     SessionManager,
     _GatewaySSHServer,
+    forwarded_client_ip,
     free_port,
     generate_keypair,
     ip_allowed,
@@ -59,6 +60,7 @@ def test_build_interactive_job_carries_session_params() -> None:
         url="https://lava.example.com",
         gateway_port=2222,
         gateway_advertise_host="gw.example.com",
+        gateway_ws_url="wss://gw.example.com/gateway-ssh",
     )
     session = SessionManager().create(device_type="qcs6490")
     job = yaml.safe_load(
@@ -77,6 +79,7 @@ def test_build_interactive_job_carries_session_params() -> None:
     assert params["REVERSE_PORT"] == str(session.reverse_port)
     assert params["GATEWAY_HOST"] == "gw.example.com"
     assert params["GATEWAY_PORT"] == "2222"
+    assert params["GATEWAY_WS_URL"] == "wss://gw.example.com/gateway-ssh"
     assert params["SESSION_PUBLIC_KEY"] == session.public_key
 
 
@@ -342,6 +345,94 @@ def test_gateway_integration_security_posture() -> None:
                 known_hosts=None,
             ):
                 pass
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        asyncio.run(gw.stop())
+
+
+def test_forwarded_client_ip_extraction() -> None:
+    assert forwarded_client_ip({"X-Real-Ip": "1.2.3.4"}) == "1.2.3.4"
+    # leftmost X-Forwarded-For entry (the original client) when no X-Real-Ip
+    assert forwarded_client_ip({"X-Forwarded-For": "5.6.7.8, 9.9.9.9"}) == "5.6.7.8"
+    assert forwarded_client_ip({}) == ""
+    assert forwarded_client_ip(None) == ""
+
+
+def test_ws_bridge_relays_ssh_banner() -> None:
+    """A WebSocket client reaches the asyncssh listener through the bridge and gets
+    its SSH banner — proving an SSH stream is carried by the wss transport. TLS is
+    Caddy's job, so the bridge itself speaks plain ws."""
+    from websockets.asyncio.client import connect as ws_connect
+
+    ssh_port = free_port()
+    ws_port = free_port()
+    gw = Gateway(
+        Config(
+            url="https://x",
+            gateway_enabled=True,
+            gateway_bind="127.0.0.1",
+            gateway_port=ssh_port,
+            gateway_ws_port=ws_port,
+        )
+    )
+    gw.ensure_started()
+
+    async def scenario() -> None:
+        async with ws_connect(
+            f"ws://127.0.0.1:{ws_port}/",
+            additional_headers={"X-Real-Ip": "127.0.0.1"},
+        ) as ws:
+            msg = await asyncio.wait_for(ws.recv(), timeout=5)
+            if isinstance(msg, str):
+                msg = msg.encode()
+            assert msg.startswith(b"SSH-2.0")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        asyncio.run(gw.stop())
+
+
+def test_ws_bridge_enforces_ip_allowlist() -> None:
+    """The bridge applies the IP allowlist to Caddy's forwarded client IP (asyncssh
+    only sees 127.0.0.1), so a disallowed source is closed before any SSH banner and
+    an allowed source still gets through."""
+    import websockets
+    from websockets.asyncio.client import connect as ws_connect
+
+    ssh_port = free_port()
+    ws_port = free_port()
+    gw = Gateway(
+        Config(
+            url="https://x",
+            gateway_enabled=True,
+            gateway_bind="127.0.0.1",
+            gateway_port=ssh_port,
+            gateway_ws_port=ws_port,
+            gateway_allow_ips=("10.0.0.0/8",),
+        )
+    )
+    gw.ensure_started()
+
+    async def scenario() -> None:
+        # disallowed forwarded IP -> closed, no banner
+        async with ws_connect(
+            f"ws://127.0.0.1:{ws_port}/",
+            additional_headers={"X-Real-Ip": "9.9.9.9"},
+        ) as ws:
+            with pytest.raises(websockets.exceptions.ConnectionClosed):
+                await asyncio.wait_for(ws.recv(), timeout=5)
+        # allowed forwarded IP -> banner relayed
+        async with ws_connect(
+            f"ws://127.0.0.1:{ws_port}/",
+            additional_headers={"X-Real-Ip": "10.1.2.3"},
+        ) as ws:
+            msg = await asyncio.wait_for(ws.recv(), timeout=5)
+            if isinstance(msg, str):
+                msg = msg.encode()
+            assert msg.startswith(b"SSH-2.0")
 
     try:
         asyncio.run(scenario())

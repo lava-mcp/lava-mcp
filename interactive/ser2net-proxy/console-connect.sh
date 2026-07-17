@@ -27,8 +27,20 @@ mkdir -p /root/.ssh && chmod 700 /root/.ssh
 printf '%s' "$SESSION_PRIVATE_KEY_B64" | base64 -d > /root/.ssh/session_key
 chmod 600 /root/.ssh/session_key
 
-echo "ser2net-proxy: dialing gateway ${GATEWAY_HOST}:${GATEWAY_PORT:-2222} as" \
-     "${SESSION_ID} (reverse ${REVERSE_PORT} -> localhost:${CONSOLE_LISTEN_PORT})"
+# Transport: prefer the WebSocket tunnel (wss://.../gateway-ssh over 443) via
+# websocat as an ssh ProxyCommand. Fall back to a direct dial of GATEWAY_PORT when
+# GATEWAY_WS_URL is unset. Held in $@ so the ProxyCommand value (with its space)
+# stays one ssh argument.
+if [ -n "${GATEWAY_WS_URL:-}" ]; then
+  set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
+  echo "ser2net-proxy: transport = websocket (${GATEWAY_WS_URL})"
+else
+  set -- -p "${GATEWAY_PORT:-2222}"
+  echo "ser2net-proxy: transport = direct ssh (${GATEWAY_HOST}:${GATEWAY_PORT:-2222})"
+fi
+
+echo "ser2net-proxy: dialing gateway as ${SESSION_ID}" \
+     "(reverse ${REVERSE_PORT} -> localhost:${CONSOLE_LISTEN_PORT})"
 
 # autossh keeps the reverse tunnel up; -R exposes the relay on the gateway's REVERSE_PORT.
 # AUTOSSH_GATETIME=0 keeps it reconnecting if ssh exits quickly; a bounded outer loop
@@ -48,7 +60,7 @@ while [ "$attempt" -lt "$max_attempts" ]; do
     -o ExitOnForwardFailure=yes \
     -i /root/.ssh/session_key \
     -R "127.0.0.1:${REVERSE_PORT}:localhost:${CONSOLE_LISTEN_PORT}" \
-    -p "${GATEWAY_PORT:-2222}" \
+    "$@" \
     "${SESSION_ID}@${GATEWAY_HOST}"
   echo "ser2net-proxy: gateway connection exited (attempt ${attempt}), retrying in 5s"
   sleep 5

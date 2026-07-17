@@ -53,6 +53,14 @@ class Config:
     # host/port the in-job container should dial back to (advertised in jobs)
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
+    # WebSocket transport for the SSH gateway. The dial-out/consumer SSH streams
+    # are carried over wss://.../gateway-ssh (443, via Caddy). The bridge listens on
+    # gateway_ws_port (Caddy proxies /gateway-ssh to it) and relays bytes to the
+    # loopback asyncssh listener. gateway_ws_url is the advertised wss:// URL handed
+    # to jobs and humans; when empty the WS transport is disabled and clients dial
+    # gateway_port directly.
+    gateway_ws_port: int = 8022
+    gateway_ws_url: str = ""
     # optional gateway access control (all empty = open). The general LAVA-proxy tools
     # are never gated here — they are equivalent to using one's own LAVA token.
     #  - allow_ips: source IPs/CIDRs permitted to connect to the SSH gateway (2222)
@@ -96,6 +104,8 @@ class Config:
             gateway_port=gw_port,
             gateway_advertise_host=os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_HOST"),
             gateway_advertise_port=int(adv_port) if adv_port else None,
+            gateway_ws_port=int(os.environ.get("LAVA_MCP_GATEWAY_WS_PORT", "8022")),
+            gateway_ws_url=os.environ.get("LAVA_MCP_GATEWAY_WS_URL", ""),
             gateway_allow_ips=_env_list("LAVA_MCP_GATEWAY_ALLOW_IPS"),
             http_allow_users=_env_list("LAVA_MCP_HTTP_ALLOW_USERS"),
             ssh_allow_users=_env_list("LAVA_MCP_SSH_ALLOW_USERS"),

@@ -62,6 +62,38 @@ def ip_allowed(ip: str, networks: list[_Network]) -> bool:
     return any(addr in net for net in networks)
 
 
+def _is_loopback(ip: str) -> bool:
+    """True if ``ip`` is a loopback address (the local WS bridge / host-local tools)."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
+    return addr.is_loopback
+
+
+def forwarded_client_ip(headers: Any) -> str:
+    """Extract the real client IP from Caddy's forwarding headers.
+
+    The WS bridge sits behind Caddy, so asyncssh only ever sees 127.0.0.1. Caddy
+    sets ``X-Real-Ip`` (and we also honour the leftmost ``X-Forwarded-For``), which
+    is what the gateway IP allowlist must be checked against. Only Caddy can reach
+    the (unpublished) bridge port, so these headers are trustworthy here.
+    """
+    getter = getattr(headers, "get", None)
+    if getter is None:
+        return ""
+    real = getter("X-Real-Ip") or getter("X-Real-IP")
+    if real:
+        return real.strip()
+    xff = getter("X-Forwarded-For")
+    if xff:
+        return xff.split(",")[0].strip()
+    return ""
+
+
 def generate_keypair() -> tuple[str, str]:
     """Return (private_key_openssh, public_key_openssh) for a fresh ed25519 key."""
     key = asyncssh.generate_private_key("ssh-ed25519")
@@ -190,6 +222,14 @@ class _GatewaySSHServer(asyncssh.SSHServer):
     def connection_made(self, conn: asyncssh.SSHServerConnection) -> None:
         peer = conn.get_extra_info("peername")
         ip = peer[0] if peer else ""
+        # Loopback peers are the local WebSocket bridge (or host-local tooling). The
+        # bridge already enforced the IP allowlist against the real forwarded client
+        # IP — asyncssh only sees 127.0.0.1 here — so trust loopback. Non-loopback
+        # peers (the direct-dial fallback when WS is disabled) are still checked.
+        if _is_loopback(ip):
+            self._allowed = True
+            logger.info("gateway: accepted local connection from %s (bridge/local)", ip)
+            return
         self._allowed = ip_allowed(ip, self._allow_networks)
         if self._allowed:
             logger.info("gateway: accepted connection from %s", ip)
@@ -306,6 +346,7 @@ class Gateway:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._server: asyncssh.SSHAcceptor | None = None
+        self._ws_server: Any = None
         self._lock = threading.Lock()
 
     # -- lifecycle (own thread + loop) -------------------------------------
@@ -346,6 +387,87 @@ class Gateway:
             self.config.gateway_port,
             server_host_keys=[host_key],
         )
+        if self.config.gateway_ws_port:
+            await self._start_ws_bridge()
+
+    async def _start_ws_bridge(self) -> None:
+        """Front the SSH listener with a WebSocket bridge (wss://.../gateway-ssh).
+
+        Caddy terminates TLS on 443 and reverse-proxies /gateway-ssh here; each WS
+        connection is relayed byte-for-byte to the loopback asyncssh listener, so the
+        SSH stream is carried over TLS/443. SSH auth still runs end-to-end in
+        asyncssh; the bridge only adds the IP-allowlist check that asyncssh can no
+        longer do itself (it sees the bridge's 127.0.0.1, not the real peer).
+        """
+        from websockets.asyncio.server import serve
+
+        self._ws_server = await serve(
+            self._ws_bridge,
+            self.config.gateway_bind,
+            self.config.gateway_ws_port,
+        )
+        logger.info(
+            "gateway: WebSocket bridge listening on %s:%s -> asyncssh 127.0.0.1:%s",
+            self.config.gateway_bind,
+            self.config.gateway_ws_port,
+            self.config.gateway_port,
+        )
+
+    async def _ws_bridge(self, ws: Any) -> None:
+        ip = forwarded_client_ip(getattr(ws.request, "headers", None))
+        if not ip_allowed(ip, self._allow_networks):
+            logger.warning(
+                "gateway WS: REJECTED %s (not in allowlist %s)",
+                ip or "<unknown>",
+                ",".join(str(n) for n in self._allow_networks) or "<empty>",
+            )
+            await ws.close(code=4403, reason="forbidden")
+            return
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", self.config.gateway_port
+            )
+        except OSError as exc:
+            logger.error("gateway WS: cannot reach asyncssh listener: %s", exc)
+            await ws.close(code=1011, reason="backend unavailable")
+            return
+        logger.info("gateway WS: bridging %s to asyncssh", ip or "<unknown>")
+        await self._ws_pump(ws, reader, writer)
+
+    async def _ws_pump(
+        self,
+        ws: Any,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """Relay bytes both ways between a WS connection and the asyncssh TCP socket."""
+
+        async def ws_to_tcp() -> None:
+            try:
+                async for msg in ws:
+                    if isinstance(msg, str):
+                        msg = msg.encode()
+                    writer.write(msg)
+                    await writer.drain()
+            except Exception:  # noqa: BLE001 - relay teardown is not exceptional
+                pass
+            finally:
+                if not writer.is_closing():
+                    writer.close()
+
+        async def tcp_to_ws() -> None:
+            try:
+                while True:
+                    data = await reader.read(65536)
+                    if not data:
+                        break
+                    await ws.send(data)
+            except Exception:  # noqa: BLE001 - relay teardown is not exceptional
+                pass
+            finally:
+                await ws.close()
+
+        await asyncio.gather(ws_to_tcp(), tcp_to_ws(), return_exceptions=True)
 
     async def stop(self) -> None:
         loop = self._loop
@@ -380,6 +502,9 @@ class Gateway:
             "public_key": public,
             "gateway_host": advertise_host,
             "gateway_port": advertise_port,
+            # when set, humans tunnel to the gateway over this wss:// URL (443) via
+            # websocat, instead of dialling gateway_port directly
+            "gateway_ws_url": self.config.gateway_ws_url,
             "reverse_port": session.reverse_port,
             "kind": session.kind,
             "expires_in": int(self.config.gateway_human_key_ttl),
