@@ -71,8 +71,9 @@ docker compose up -d
 
 - Agents connect to `https://$LAVA_MCP_DOMAIN/mcp` (streamable-HTTP transport).
 - In-job containers and humans reach the SSH gateway over the WebSocket transport at
-  `wss://$LAVA_MCP_DOMAIN/gateway-ssh` (Caddy proxies it to the in-process bridge).
-  Set `LAVA_MCP_GATEWAY_WS_URL` to that URL; clients use `websocat`.
+  `wss://$LAVA_MCP_DOMAIN/mcp/gateway-ssh` — a WebSocket route on the MCP app itself
+  (same port as `/mcp`, so Caddy's existing `/mcp` route serves it). Set
+  `LAVA_MCP_GATEWAY_WS_URL` to that URL; clients use `websocat`.
 
 Or run the HTTP transport directly:
 
@@ -85,7 +86,7 @@ lava-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --gateway
 In hosted mode with `--gateway` (or `LAVA_MCP_GATEWAY_ENABLED=true`), the server runs
 an in-process SSH rendezvous fronted by a WebSocket bridge. `open_board_session`
 submits a LAVA job that runs a device-attached container; the container dials **out**
-(`ssh -R`, tunnelled over `wss://.../gateway-ssh` via `websocat`) to the gateway, so
+(`ssh -R`, tunnelled over `wss://.../mcp/gateway-ssh` via `websocat`) to the gateway, so
 no inbound access to the worker is needed. The asyncssh listener is loopback-only and
 reachable exclusively through the bridge; there is no direct SSH port.
 
@@ -148,7 +149,7 @@ schedules it on a permitted device.
 The gateway tunnels into an isolated lab network, so its trust model matters — see
 [docs/security.md](docs/security.md) for the roles, enforced controls (loopback-only
 reverse tunnels, per-session keys, ephemeral human keys, session ownership), and the
-operator responsibilities (set `LAVA_MCP_GATEWAY_ALLOW_IPS`, front `/gateway-ssh` via Caddy).
+operator responsibilities (set `LAVA_MCP_GATEWAY_ALLOW_IPS`; Caddy's `/mcp` route already fronts the `/mcp/gateway-ssh` WebSocket).
 
 ### For humans (without an agent)
 
@@ -183,7 +184,7 @@ For a live PTY on the board — not command-at-a-time — call `attach_shell(ses
 It mints a short-lived keypair, authorises it **both** at the gateway (for the tunnel)
 and inside the board container (appended to its `authorized_keys` over the existing
 session), and returns a private key plus a ready-to-use `ssh_config`. The config's jump
-host tunnels to the gateway over `wss://.../gateway-ssh` (via `websocat`), then
+host tunnels to the gateway over `wss://.../mcp/gateway-ssh` (via `websocat`), then
 `ProxyJump`s into the container's own sshd — the gateway forwards but offers no shell of
 its own, and the container's key is never disclosed. Requires `websocat` on your PATH:
 
@@ -244,7 +245,7 @@ Flow:
    console-ready test echoes the sentinel (`LAVA_MCP_CONSOLE_WRITABLE`), the proxy
    enables writes.
 3. `attach_console(session_id)` returns an `ssh -W` command that tunnels to the gateway
-   over `wss://.../gateway-ssh` (via `websocat`; wrap with `socat` for a raw PTY) — you
+   over `wss://.../mcp/gateway-ssh` (via `websocat`; wrap with `socat` for a raw PTY) — you
    get the live UART, bridged through the gateway on a loopback-only port.
 4. `close_console_session(session_id)` revokes access; ending the job tears down the proxy.
 
@@ -287,8 +288,7 @@ test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
 | `LAVA_MCP_GATEWAY_ENABLED` | `--gateway` | Enable interactive SSH board-session gateway |
 | `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | Internal loopback asyncssh port the WS bridge relays to (default 2222) |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
-| `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | Advertised `wss://host/gateway-ssh` URL; carries the gateway SSH over WebSocket/TLS via Caddy (requires `websocat` on clients). Empty = direct dial |
-| `LAVA_MCP_GATEWAY_WS_PORT` | — | Bridge listen port Caddy proxies `/gateway-ssh` to (default 8022) |
+| `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | Advertised `wss://host/mcp/gateway-ssh` URL; the SSH gateway is served as a WebSocket route on the MCP app (same port as `/mcp`). Required for interactive sessions; clients need `websocat` |
 | `LAVA_MCP_GATEWAY_ALLOW_IPS` | `--gateway-allow-ip` | Source IPs/CIDRs allowed to reach the SSH gateway (empty = all) |
 | `LAVA_MCP_HTTP_ALLOW_USERS` | `--http-allow-user` | LAVA users allowed the interactive 'use' tools (empty = all) |
 | `LAVA_MCP_SSH_ALLOW_USERS` | `--ssh-allow-user` | LAVA users allowed the 'attach' (SSH/console) tools (empty = all) |

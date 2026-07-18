@@ -346,7 +346,6 @@ class Gateway:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._server: asyncssh.SSHAcceptor | None = None
-        self._ws_server: Any = None
         self._lock = threading.Lock()
 
     # -- lifecycle (own thread + loop) -------------------------------------
@@ -390,40 +389,25 @@ class Gateway:
             self.config.gateway_port,
             server_host_keys=[host_key],
         )
-        await self._start_ws_bridge()
 
-    async def _start_ws_bridge(self) -> None:
-        """Front the SSH listener with a WebSocket bridge (wss://.../gateway-ssh).
+    async def bridge_websocket(self, websocket: Any) -> None:
+        """Relay a Starlette WebSocket connection to the loopback asyncssh listener.
 
-        Caddy terminates TLS on 443 and reverse-proxies /gateway-ssh here; each WS
-        connection is relayed byte-for-byte to the loopback asyncssh listener, so the
-        SSH stream is carried over TLS/443. SSH auth still runs end-to-end in
-        asyncssh; the bridge only adds the IP-allowlist check that asyncssh can no
-        longer do itself (it sees the bridge's 127.0.0.1, not the real peer).
+        Served as a WebSocket route on the MCP app (``/mcp/gateway-ssh``): Caddy
+        terminates TLS on 443 and reverse-proxies it here, so the SSH stream is
+        carried over TLS/443 on the same port as ``/mcp``. Each connection is relayed
+        byte-for-byte; SSH auth still runs end-to-end in asyncssh. The bridge adds the
+        IP-allowlist check asyncssh can no longer do itself (it sees the app's
+        127.0.0.1, not the real peer) against Caddy's forwarded client IP.
         """
-        from websockets.asyncio.server import serve
-
-        self._ws_server = await serve(
-            self._ws_bridge,
-            self.config.gateway_bind,
-            self.config.gateway_ws_port,
-        )
-        logger.info(
-            "gateway: WebSocket bridge listening on %s:%s -> asyncssh 127.0.0.1:%s",
-            self.config.gateway_bind,
-            self.config.gateway_ws_port,
-            self.config.gateway_port,
-        )
-
-    async def _ws_bridge(self, ws: Any) -> None:
-        ip = forwarded_client_ip(getattr(ws.request, "headers", None))
+        ip = forwarded_client_ip(getattr(websocket, "headers", None))
         if not ip_allowed(ip, self._allow_networks):
             logger.warning(
                 "gateway WS: REJECTED %s (not in allowlist %s)",
                 ip or "<unknown>",
                 ",".join(str(n) for n in self._allow_networks) or "<empty>",
             )
-            await ws.close(code=4403, reason="forbidden")
+            await websocket.close(code=4403)
             return
         try:
             reader, writer = await asyncio.open_connection(
@@ -431,25 +415,26 @@ class Gateway:
             )
         except OSError as exc:
             logger.error("gateway WS: cannot reach asyncssh listener: %s", exc)
-            await ws.close(code=1011, reason="backend unavailable")
+            await websocket.close(code=1011)
             return
+        await websocket.accept()
         logger.info("gateway WS: bridging %s to asyncssh", ip or "<unknown>")
-        await self._ws_pump(ws, reader, writer)
+        await self._relay(websocket, reader, writer)
 
-    async def _ws_pump(
+    async def _relay(
         self,
-        ws: Any,
+        websocket: Any,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Relay bytes both ways between a WS connection and the asyncssh TCP socket."""
+        """Relay bytes both ways between a Starlette WebSocket and the asyncssh TCP
+        socket until either side closes."""
 
         async def ws_to_tcp() -> None:
             try:
-                async for msg in ws:
-                    if isinstance(msg, str):
-                        msg = msg.encode()
-                    writer.write(msg)
+                while True:
+                    data = await websocket.receive_bytes()
+                    writer.write(data)
                     await writer.drain()
             except Exception:  # noqa: BLE001 - relay teardown is not exceptional
                 pass
@@ -463,11 +448,14 @@ class Gateway:
                     data = await reader.read(65536)
                     if not data:
                         break
-                    await ws.send(data)
+                    await websocket.send_bytes(data)
             except Exception:  # noqa: BLE001 - relay teardown is not exceptional
                 pass
             finally:
-                await ws.close()
+                try:
+                    await websocket.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
         await asyncio.gather(ws_to_tcp(), tcp_to_ws(), return_exceptions=True)
 

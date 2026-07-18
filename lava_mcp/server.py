@@ -188,6 +188,27 @@ def build_server(config: Config) -> FastMCP:
         stateless_http=config.stateless_http,
     )
 
+    if gateway is not None:
+        # Serve the gateway's SSH-over-WebSocket bridge as a route on this same app
+        # (one port), at a sub-path of the MCP endpoint: <streamable_http_path>/
+        # gateway-ssh, i.e. /mcp/gateway-ssh. Caddy already routes /mcp* here and
+        # bypasses anubis, so the dial-out/consumer SSH streams ride wss:// on 443.
+        from starlette.routing import WebSocketRoute
+
+        async def _gateway_ws_endpoint(websocket: Any) -> None:
+            await asyncio.to_thread(gateway.ensure_started)
+            await gateway.bridge_websocket(websocket)
+
+        ws_path = mcp.settings.streamable_http_path.rstrip("/") + "/gateway-ssh"
+        # FastMCP folds _custom_starlette_routes into the Starlette app it builds for
+        # the streamable-HTTP transport; a WebSocketRoute rides along fine (the list is
+        # typed for HTTP Routes, but Starlette's router accepts WebSocketRoute too).
+        mcp._custom_starlette_routes.append(
+            WebSocketRoute(ws_path, _gateway_ws_endpoint)  # type: ignore[arg-type]
+        )
+        # exposed for tests/introspection; the tools capture `gateway` via closure
+        mcp._lava_gateway = gateway  # type: ignore[attr-defined]
+
     def client() -> LavaClient:
         """Resolve the LAVA client for the current request (per-client creds)."""
         request = None

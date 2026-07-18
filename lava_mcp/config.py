@@ -48,22 +48,20 @@ class Config:
     stateless_http: bool = False
     # interactive SSH gateway (only used in hosted mode). The gateway is
     # WebSocket-only: the asyncssh listener binds loopback (internal) and is reached
-    # exclusively through the WebSocket bridge below.
+    # exclusively through the WebSocket bridge served on the MCP app.
     gateway_enabled: bool = False
-    # gateway_bind is the WS bridge bind (Caddy reaches it on the container network);
     # gateway_port is the internal loopback asyncssh port the bridge relays to.
-    gateway_bind: str = "0.0.0.0"
     gateway_port: int = 2222
     # host the in-job container's ssh user@host label uses (advertised in jobs)
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
     # WebSocket transport for the SSH gateway. The dial-out/consumer SSH streams are
-    # carried over wss://.../gateway-ssh (443, via Caddy) — the only supported
-    # transport. The bridge listens on gateway_ws_port (Caddy proxies /gateway-ssh to
-    # it) and relays bytes to the loopback asyncssh listener. gateway_ws_url is the
-    # advertised wss:// URL handed to jobs and humans; the interactive tools refuse
-    # when it is unset (there is no direct-dial fallback).
-    gateway_ws_port: int = 8022
+    # carried over wss://.../mcp/gateway-ssh (443, via Caddy) — the only supported
+    # transport. The bridge is a WebSocket route on the MCP app itself (same port as
+    # /mcp) at <streamable_http_path>/gateway-ssh, relaying bytes to the loopback
+    # asyncssh listener. gateway_ws_url is the advertised wss:// URL handed to jobs
+    # and humans; the interactive tools refuse when it is unset (there is no
+    # direct-dial fallback).
     gateway_ws_url: str = ""
     # optional gateway access control (all empty = open). The general LAVA-proxy tools
     # are never gated here — they are equivalent to using one's own LAVA token.
@@ -105,11 +103,9 @@ class Config:
             json_response=_env_bool("LAVA_MCP_JSON_RESPONSE", True),
             stateless_http=_env_bool("LAVA_MCP_STATELESS", False),
             gateway_enabled=_env_bool("LAVA_MCP_GATEWAY_ENABLED"),
-            gateway_bind=os.environ.get("LAVA_MCP_GATEWAY_BIND", "0.0.0.0"),
             gateway_port=gw_port,
             gateway_advertise_host=os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_HOST"),
             gateway_advertise_port=int(adv_port) if adv_port else None,
-            gateway_ws_port=int(os.environ.get("LAVA_MCP_GATEWAY_WS_PORT", "8022")),
             gateway_ws_url=os.environ.get("LAVA_MCP_GATEWAY_WS_URL", ""),
             gateway_allow_ips=_env_list("LAVA_MCP_GATEWAY_ALLOW_IPS"),
             http_allow_users=_env_list("LAVA_MCP_HTTP_ALLOW_USERS"),

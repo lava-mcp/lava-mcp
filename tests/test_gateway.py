@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from lava_mcp.jobs import build_interactive_job
 from lava_mcp.server import build_server
 
 _HAS_WS_CLIENT = bool(shutil.which("websocat") and shutil.which("ssh"))
+_HAS_UVICORN = importlib.util.find_spec("uvicorn") is not None
 
 
 class _FakeConn:
@@ -324,7 +326,6 @@ def test_gateway_integration_security_posture() -> None:
         Config(
             url="https://x",
             gateway_enabled=True,
-            gateway_bind="127.0.0.1",
             gateway_port=port,
         )
     )
@@ -376,149 +377,193 @@ def test_forwarded_client_ip_extraction() -> None:
     assert forwarded_client_ip(None) == ""
 
 
-def test_ws_bridge_relays_ssh_banner() -> None:
-    """A WebSocket client reaches the asyncssh listener through the bridge and gets
-    its SSH banner — proving an SSH stream is carried by the wss transport. TLS is
-    Caddy's job, so the bridge itself speaks plain ws."""
-    from websockets.asyncio.client import connect as ws_connect
+class _FakeWebSocket:
+    """Minimal Starlette-WebSocket stand-in for ``bridge_websocket`` tests.
 
-    ssh_port = free_port()
-    ws_port = free_port()
-    gw = Gateway(
-        Config(
-            url="https://x",
-            gateway_enabled=True,
-            gateway_bind="127.0.0.1",
-            gateway_port=ssh_port,
-            gateway_ws_port=ws_port,
-        )
-    )
-    gw.ensure_started()
+    ``receive_bytes`` blocks until the test releases it (or the relay closes the
+    socket), so the tcp->ws direction has time to carry the asyncssh banner before
+    teardown — making the byte-relay assertions deterministic."""
 
-    async def scenario() -> None:
-        async with ws_connect(
-            f"ws://127.0.0.1:{ws_port}/",
-            additional_headers={"X-Real-Ip": "127.0.0.1"},
-        ) as ws:
-            msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            if isinstance(msg, str):
-                msg = msg.encode()
-            assert msg.startswith(b"SSH-2.0")
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = headers
+        self.accepted = False
+        self.close_code: int | None = None
+        self.sent: list[bytes] = []
+        self._release = asyncio.Event()
 
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def receive_bytes(self) -> bytes:
+        await self._release.wait()
+        raise RuntimeError("client closed")  # ends the ws->tcp direction
+
+    async def send_bytes(self, data: bytes) -> None:
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000) -> None:
+        self.close_code = code
+        self._release.set()
+
+
+async def _collect_banner(gw: Gateway, ws: _FakeWebSocket) -> None:
+    task = asyncio.create_task(gw.bridge_websocket(ws))
     try:
-        asyncio.run(scenario())
+        for _ in range(100):
+            if ws.sent:
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        ws._release.set()
+        await asyncio.wait_for(task, timeout=5)
+
+
+def test_bridge_websocket_relays_ssh_banner() -> None:
+    """bridge_websocket accepts a WebSocket and relays the asyncssh banner back —
+    proving an SSH stream is carried over the WebSocket transport."""
+    ssh_port = free_port()
+    gw = Gateway(Config(url="https://x", gateway_enabled=True, gateway_port=ssh_port))
+    gw.ensure_started()
+    ws = _FakeWebSocket({"X-Real-Ip": "127.0.0.1"})
+    try:
+        asyncio.run(_collect_banner(gw, ws))
     finally:
         asyncio.run(gw.stop())
+    assert ws.accepted is True
+    assert ws.sent and ws.sent[0].startswith(b"SSH-2.0")
 
 
-def test_ws_bridge_enforces_ip_allowlist() -> None:
+def test_bridge_websocket_enforces_ip_allowlist() -> None:
     """The bridge applies the IP allowlist to Caddy's forwarded client IP (asyncssh
-    only sees 127.0.0.1), so a disallowed source is closed before any SSH banner and
-    an allowed source still gets through."""
-    import websockets
-    from websockets.asyncio.client import connect as ws_connect
-
+    only sees 127.0.0.1): a disallowed source is closed 4403 before accept/banner, an
+    allowed source is accepted and gets the banner."""
     ssh_port = free_port()
-    ws_port = free_port()
     gw = Gateway(
         Config(
             url="https://x",
             gateway_enabled=True,
-            gateway_bind="127.0.0.1",
             gateway_port=ssh_port,
-            gateway_ws_port=ws_port,
             gateway_allow_ips=("10.0.0.0/8",),
         )
     )
     gw.ensure_started()
-
-    async def scenario() -> None:
-        # disallowed forwarded IP -> closed, no banner
-        async with ws_connect(
-            f"ws://127.0.0.1:{ws_port}/",
-            additional_headers={"X-Real-Ip": "9.9.9.9"},
-        ) as ws:
-            with pytest.raises(websockets.exceptions.ConnectionClosed):
-                await asyncio.wait_for(ws.recv(), timeout=5)
-        # allowed forwarded IP -> banner relayed
-        async with ws_connect(
-            f"ws://127.0.0.1:{ws_port}/",
-            additional_headers={"X-Real-Ip": "10.1.2.3"},
-        ) as ws:
-            msg = await asyncio.wait_for(ws.recv(), timeout=5)
-            if isinstance(msg, str):
-                msg = msg.encode()
-            assert msg.startswith(b"SSH-2.0")
-
+    bad = _FakeWebSocket({"X-Real-Ip": "9.9.9.9"})
+    good = _FakeWebSocket({"X-Real-Ip": "10.1.2.3"})
     try:
-        asyncio.run(scenario())
+        asyncio.run(asyncio.wait_for(gw.bridge_websocket(bad), timeout=5))
+        asyncio.run(_collect_banner(gw, good))
     finally:
         asyncio.run(gw.stop())
+    assert bad.close_code == 4403
+    assert bad.accepted is False
+    assert not bad.sent
+    assert good.accepted is True
+    assert good.sent and good.sent[0].startswith(b"SSH-2.0")
 
 
-def test_config_reads_websocket_settings(monkeypatch: Any) -> None:
-    monkeypatch.setenv("LAVA_MCP_GATEWAY_WS_URL", "wss://h/gateway-ssh")
-    monkeypatch.setenv("LAVA_MCP_GATEWAY_WS_PORT", "9443")
-    cfg = Config.from_env()
-    assert cfg.gateway_ws_url == "wss://h/gateway-ssh"
-    assert cfg.gateway_ws_port == 9443
+def test_gateway_ws_route_registered_under_mcp() -> None:
+    """The gateway registers its bridge as a WebSocket route at /mcp/gateway-ssh on
+    the MCP app (single port, sub-path of /mcp)."""
+    from starlette.routing import WebSocketRoute
 
-
-@pytest.mark.skipif(not _HAS_WS_CLIENT, reason="needs websocat and ssh on PATH")
-def test_mode1_dialout_over_websocket() -> None:
-    """The Mode 1 dial-out — `ssh -R` with a websocat ProxyCommand, exactly as
-    lava-gateway-connect now does it — registers its reverse-forward through the WS
-    bridge end-to-end. This is the real product path (minus TLS, which is Caddy's)."""
-    ssh_port = free_port()
-    ws_port = free_port()
-    gw = Gateway(
+    mcp = build_server(
         Config(
             url="https://x",
             gateway_enabled=True,
-            gateway_bind="127.0.0.1",
-            gateway_port=ssh_port,
-            gateway_ws_port=ws_port,
+            gateway_ws_url="wss://h/mcp/gateway-ssh",
         )
     )
+    ws_paths = [
+        r.path for r in mcp._custom_starlette_routes if isinstance(r, WebSocketRoute)
+    ]
+    assert "/mcp/gateway-ssh" in ws_paths
+    assert getattr(mcp, "_lava_gateway", None) is not None
+
+
+def test_config_reads_websocket_url(monkeypatch: Any) -> None:
+    monkeypatch.setenv("LAVA_MCP_GATEWAY_WS_URL", "wss://h/mcp/gateway-ssh")
+    cfg = Config.from_env()
+    assert cfg.gateway_ws_url == "wss://h/mcp/gateway-ssh"
+
+
+@pytest.mark.skipif(
+    not (_HAS_WS_CLIENT and _HAS_UVICORN),
+    reason="needs websocat, ssh and uvicorn",
+)
+def test_mode1_dialout_over_websocket() -> None:
+    """End-to-end: `ssh -R` with a websocat ProxyCommand (exactly as
+    lava-gateway-connect now does it) reaches the bridge served as a WebSocket route
+    on a real ASGI server and registers its reverse-forward. The real product path,
+    single port at /mcp/gateway-ssh, minus TLS (Caddy's job)."""
+    import threading
+    import time
+
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.routing import WebSocketRoute
+
+    ssh_port = free_port()
+    app_port = free_port()
+    gw = Gateway(Config(url="https://x", gateway_enabled=True, gateway_port=ssh_port))
     session = gw.manager.create(kind="container")
     gw.ensure_started()
+
+    async def endpoint(ws: Any) -> None:
+        await gw.bridge_websocket(ws)
+
+    app = Starlette(routes=[WebSocketRoute("/mcp/gateway-ssh", endpoint)])
+    server = uvicorn.Server(
+        uvicorn.Config(app, host="127.0.0.1", port=app_port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
 
     keyfile = tempfile.NamedTemporaryFile("w", suffix=".key", delete=False)
     keyfile.write(session.private_key)
     keyfile.close()
     os.chmod(keyfile.name, 0o600)
 
-    proxy = f"websocat -b ws://127.0.0.1:{ws_port}/"
-    ssh = subprocess.Popen(
-        [
-            "ssh",
-            "-N",
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            f"ProxyCommand={proxy}",
-            "-i",
-            keyfile.name,
-            "-R",
-            f"127.0.0.1:{session.reverse_port}:localhost:22",
-            f"{session.session_id}@dummy",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    ssh: subprocess.Popen[bytes] | None = None
     try:
+        for _ in range(100):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started, "uvicorn did not start"
+
+        proxy = f"websocat -b ws://127.0.0.1:{app_port}/mcp/gateway-ssh"
+        ssh = subprocess.Popen(
+            [
+                "ssh",
+                "-N",
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                f"ProxyCommand={proxy}",
+                "-i",
+                keyfile.name,
+                "-R",
+                f"127.0.0.1:{session.reverse_port}:localhost:22",
+                f"{session.session_id}@dummy",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         connected = session._connected.wait(timeout=20)
     finally:
-        ssh.terminate()
-        try:
-            ssh.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            ssh.kill()
-            ssh.communicate()
+        if ssh is not None:
+            ssh.terminate()
+            try:
+                ssh.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                ssh.kill()
+                ssh.communicate()
+        server.should_exit = True
+        thread.join(timeout=5)
         os.unlink(keyfile.name)
         asyncio.run(gw.stop())
 
