@@ -50,16 +50,21 @@ There are TWO different ways to get an interactive shell/console, for different 
 1. Board session — a shell in a container running *next to* the board (on the
    worker), NOT a shell on the board itself. Use it for host-side work against the
    device: flashing, fastboot/adb, qdl, and bring-up. It needs the board's USB
-   exposed to the container. Tools: open_board_session -> run_in_session (run one
-   command) or attach_shell (interactive ssh). Only devices tagged for remote access
-   can host one.
+   exposed to the container. Reach for it when you need to control *how* the board is
+   driven from the host rather than the fixed deploy LAVA would run — e.g. trying
+   different flashing software or versions, custom fastboot/qdl/adb sequences, or
+   deeper hands-on debugging over USB (a board that won't boot, recovery mode).
+   Tools: open_board_session -> run_in_session (run one command) or attach_shell
+   (interactive ssh). Only devices tagged for remote access can host one.
 
 2. Serial console — the board's *own* serial console (UART): boot/kernel logs, the
    login prompt, a shell on the booted board. Use it when you need what's actually on
-   the board, or console access with no DUT networking. Unlike a board session, this
-   path uses LAVA to DEPLOY and BOOT an image first; the server then adds a test
-   action that bridges the console out. Tools: check_serial_console_support ->
-   open_console_session -> attach_console.
+   the board, or console access with no DUT networking. Reach for it to interact with
+   the booted board directly — drive tests and run commands live at the console
+   WITHOUT writing a LAVA test definition, watch the boot, or work with the
+   bootloader/login prompt. Unlike a board session, this path uses LAVA to DEPLOY and
+   BOOT an image first; the server then adds a test action that bridges the console
+   out. Tools: check_serial_console_support -> open_console_session -> attach_console.
 
    Writing a correct deploy+boot LAVA job from scratch is hard. Do NOT hand-author
    the boot flow — start from a job that already deploys and boots this device and
