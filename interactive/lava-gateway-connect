@@ -5,24 +5,18 @@
 set -eu
 
 : "${GATEWAY_HOST:?missing GATEWAY_HOST}"
+: "${GATEWAY_WS_URL:?missing GATEWAY_WS_URL}"
 : "${SESSION_ID:?missing SESSION_ID}"
 : "${REVERSE_PORT:?missing REVERSE_PORT}"
 : "${SESSION_PRIVATE_KEY:?missing SESSION_PRIVATE_KEY}"
 : "${SESSION_PUBLIC_KEY:?missing SESSION_PUBLIC_KEY}"
 
-# Transport: when GATEWAY_WS_URL is set the SSH stream tunnels over WebSocket/TLS
-# (443, via Caddy) using websocat as an ssh ProxyCommand. Otherwise fall back to a
-# direct dial of GATEWAY_PORT.
-# Held in the positional params ($@, which this script otherwise ignores) so the
-# ProxyCommand value — which contains a space — survives as a single ssh argument.
-if [ -n "${GATEWAY_WS_URL:-}" ]; then
-  set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
-  echo "lava-mcp: transport = websocket (${GATEWAY_WS_URL})"
-else
-  : "${GATEWAY_PORT:?missing GATEWAY_PORT (and no GATEWAY_WS_URL)}"
-  set -- -p "${GATEWAY_PORT}"
-  echo "lava-mcp: transport = direct ssh (${GATEWAY_HOST}:${GATEWAY_PORT})"
-fi
+# The SSH stream tunnels over WebSocket/TLS (443, via Caddy) using websocat as an
+# ssh ProxyCommand. Held in the positional params ($@, which this script otherwise
+# ignores) so the ProxyCommand value — which contains a space — survives as a
+# single ssh argument.
+set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
+echo "lava-mcp: transport = websocket (${GATEWAY_WS_URL})"
 
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh

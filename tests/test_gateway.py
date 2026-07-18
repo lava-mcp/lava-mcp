@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +25,8 @@ from lava_mcp.gateway import (
 )
 from lava_mcp.jobs import build_interactive_job
 from lava_mcp.server import build_server
+
+_HAS_WS_CLIENT = bool(shutil.which("websocat") and shutil.which("ssh"))
 
 
 class _FakeConn:
@@ -78,7 +84,8 @@ def test_build_interactive_job_carries_session_params() -> None:
     assert params["SESSION_ID"] == session.session_id
     assert params["REVERSE_PORT"] == str(session.reverse_port)
     assert params["GATEWAY_HOST"] == "gw.example.com"
-    assert params["GATEWAY_PORT"] == "2222"
+    # WebSocket-only: no direct-dial port is advertised, only the wss:// URL
+    assert "GATEWAY_PORT" not in params
     assert params["GATEWAY_WS_URL"] == "wss://gw.example.com/gateway-ssh"
     assert params["SESSION_PUBLIC_KEY"] == session.public_key
 
@@ -279,11 +286,20 @@ def test_gateway_denies_shell_and_unix_channels() -> None:
 
 
 def test_gateway_attach_human_authorises_key() -> None:
-    gw = Gateway(Config(url="https://x", gateway_advertise_host="gw.example.com"))
+    gw = Gateway(
+        Config(
+            url="https://x",
+            gateway_advertise_host="gw.example.com",
+            gateway_ws_url="wss://gw.example.com/gateway-ssh",
+        )
+    )
     s = gw.manager.create(kind="console")
     info = gw.attach_human(s.session_id)
     assert "PRIVATE KEY" in info["private_key"]
     assert info["gateway_host"] == "gw.example.com"
+    # WebSocket-only: the advertised transport is the wss URL, no direct-dial port
+    assert info["gateway_ws_url"] == "wss://gw.example.com/gateway-ssh"
+    assert "gateway_port" not in info
     assert info["reverse_port"] == s.reverse_port
     assert info["expires_in"] == 3600
     assert len(s.active_human_keys()) == 1
@@ -438,3 +454,73 @@ def test_ws_bridge_enforces_ip_allowlist() -> None:
         asyncio.run(scenario())
     finally:
         asyncio.run(gw.stop())
+
+
+def test_config_reads_websocket_settings(monkeypatch: Any) -> None:
+    monkeypatch.setenv("LAVA_MCP_GATEWAY_WS_URL", "wss://h/gateway-ssh")
+    monkeypatch.setenv("LAVA_MCP_GATEWAY_WS_PORT", "9443")
+    cfg = Config.from_env()
+    assert cfg.gateway_ws_url == "wss://h/gateway-ssh"
+    assert cfg.gateway_ws_port == 9443
+
+
+@pytest.mark.skipif(not _HAS_WS_CLIENT, reason="needs websocat and ssh on PATH")
+def test_mode1_dialout_over_websocket() -> None:
+    """The Mode 1 dial-out — `ssh -R` with a websocat ProxyCommand, exactly as
+    lava-gateway-connect now does it — registers its reverse-forward through the WS
+    bridge end-to-end. This is the real product path (minus TLS, which is Caddy's)."""
+    ssh_port = free_port()
+    ws_port = free_port()
+    gw = Gateway(
+        Config(
+            url="https://x",
+            gateway_enabled=True,
+            gateway_bind="127.0.0.1",
+            gateway_port=ssh_port,
+            gateway_ws_port=ws_port,
+        )
+    )
+    session = gw.manager.create(kind="container")
+    gw.ensure_started()
+
+    keyfile = tempfile.NamedTemporaryFile("w", suffix=".key", delete=False)
+    keyfile.write(session.private_key)
+    keyfile.close()
+    os.chmod(keyfile.name, 0o600)
+
+    proxy = f"websocat -b ws://127.0.0.1:{ws_port}/"
+    ssh = subprocess.Popen(
+        [
+            "ssh",
+            "-N",
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            f"ProxyCommand={proxy}",
+            "-i",
+            keyfile.name,
+            "-R",
+            f"127.0.0.1:{session.reverse_port}:localhost:22",
+            f"{session.session_id}@dummy",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        connected = session._connected.wait(timeout=20)
+    finally:
+        ssh.terminate()
+        try:
+            ssh.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            ssh.kill()
+            ssh.communicate()
+        os.unlink(keyfile.name)
+        asyncio.run(gw.stop())
+
+    assert connected
+    assert session.status == "connected"

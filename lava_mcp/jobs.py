@@ -30,13 +30,11 @@ def build_interactive_job(
 ) -> str:
     """Return the YAML job definition for an interactive session on ``device_type``."""
     gateway_host = config.gateway_advertise_host or config.host
-    gateway_port = config.gateway_advertise_port or config.gateway_port
 
     parameters = {
+        # GATEWAY_HOST is only the ssh user@host label; the container tunnels its
+        # ssh -R over GATEWAY_WS_URL (wss://, 443, via Caddy) using websocat.
         "GATEWAY_HOST": gateway_host,
-        "GATEWAY_PORT": str(gateway_port),
-        # When set, the container tunnels its ssh -R over this wss:// URL (443, via
-        # Caddy) instead of dialling GATEWAY_PORT directly.
         "GATEWAY_WS_URL": config.gateway_ws_url,
         "SESSION_ID": session.session_id,
         "REVERSE_PORT": str(session.reverse_port),

@@ -65,12 +65,14 @@ it hosted. `docker compose` brings up the MCP server behind Caddy (automatic HTT
 and exposes the SSH board-session gateway:
 
 ```sh
-cp .env.example .env      # set LAVA_URL/LAVA_TOKEN/LAVA_MCP_DOMAIN/LAVA_MCP_GATEWAY_HOST
+cp .env.example .env      # set LAVA_URL/LAVA_TOKEN/LAVA_MCP_DOMAIN/LAVA_MCP_GATEWAY_WS_URL
 docker compose up -d
 ```
 
 - Agents connect to `https://$LAVA_MCP_DOMAIN/mcp` (streamable-HTTP transport).
-- In-job containers dial the SSH gateway at `$LAVA_MCP_GATEWAY_HOST:2222`.
+- In-job containers and humans reach the SSH gateway over the WebSocket transport at
+  `wss://$LAVA_MCP_DOMAIN/gateway-ssh` (Caddy proxies it to the in-process bridge).
+  Set `LAVA_MCP_GATEWAY_WS_URL` to that URL; clients use `websocat`.
 
 Or run the HTTP transport directly:
 
@@ -81,9 +83,11 @@ lava-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --gateway
 ## Interactive board sessions (gateway)
 
 In hosted mode with `--gateway` (or `LAVA_MCP_GATEWAY_ENABLED=true`), the server runs
-an in-process SSH rendezvous. `open_board_session` submits a LAVA job that runs a
-device-attached container; the container dials **out** (`ssh -R`) to the gateway, so
-no inbound access to the worker is needed.
+an in-process SSH rendezvous fronted by a WebSocket bridge. `open_board_session`
+submits a LAVA job that runs a device-attached container; the container dials **out**
+(`ssh -R`, tunnelled over `wss://.../gateway-ssh` via `websocat`) to the gateway, so
+no inbound access to the worker is needed. The asyncssh listener is loopback-only and
+reachable exclusively through the bridge; there is no direct SSH port.
 
 ```mermaid
 sequenceDiagram
@@ -94,9 +98,9 @@ sequenceDiagram
 
     Agent->>MCP: open_board_session(device_type)
     Note over MCP: mint per-session ed25519 keypair,<br/>allocate reverse port, create session
-    MCP->>LAVA: submit_job (interactive job,<br/>key + gateway host/port + reverse port)
+    MCP->>LAVA: submit_job (interactive job,<br/>key + gateway ws url + reverse port)
     LAVA->>Board: schedule on a worker with the board,<br/>run device-attached container
-    Board->>MCP: ssh -R reverse_port:localhost:22<br/>(auth with session key)
+    Board->>MCP: ssh -R reverse_port:localhost:22<br/>(over wss via websocat, auth with session key)
     Note over MCP: validate key, accept reverse forward,<br/>mark session "connected"
     MCP-->>Agent: session connected
 
@@ -123,10 +127,11 @@ Optional allowlists gate the interactive features (all default to open). The gen
 LAVA-proxy tools are **never** gated here — they are equivalent to using your own LAVA
 token, so `/mcp` is usable by any token holder.
 
-- `LAVA_MCP_GATEWAY_ALLOW_IPS` — comma/space-separated IPs or CIDRs permitted to
-  connect to the SSH gateway on `:2222`. It applies to **every** connection — in-job
-  containers and humans alike — dropped before authentication. Set it to your lab worker
-  network plus any human/VPN source ranges.
+- `LAVA_MCP_GATEWAY_ALLOW_IPS` — comma/space-separated IPs or CIDRs permitted to reach
+  the gateway. It is enforced at the WebSocket bridge against Caddy's forwarded client
+  IP and applies to **every** connection — in-job containers and humans alike — dropped
+  before authentication. Set it to your lab worker network plus any human/VPN source
+  ranges.
 - `LAVA_MCP_HTTP_ALLOW_USERS` — LAVA users (via `whoami`) allowed the interactive *use*
   tools: `open_board_session`, `run_in_session`, `close_*`, `list_*`,
   `open_console_session`, `check_serial_console_support`.
@@ -143,7 +148,7 @@ schedules it on a permitted device.
 The gateway tunnels into an isolated lab network, so its trust model matters — see
 [docs/security.md](docs/security.md) for the roles, enforced controls (loopback-only
 reverse tunnels, per-session keys, ephemeral human keys, session ownership), and the
-operator responsibilities (set `LAVA_MCP_GATEWAY_ALLOW_IPS`, expose only 2222).
+operator responsibilities (set `LAVA_MCP_GATEWAY_ALLOW_IPS`, front `/gateway-ssh` via Caddy).
 
 ### For humans (without an agent)
 
@@ -177,15 +182,15 @@ This is command-at-a-time execution over the gateway, not a live PTY.
 For a live PTY on the board — not command-at-a-time — call `attach_shell(session_id)`.
 It mints a short-lived keypair, authorises it **both** at the gateway (for the tunnel)
 and inside the board container (appended to its `authorized_keys` over the existing
-session), and returns a ready-to-run `ssh` command. You `ProxyJump` through the gateway
-straight into the container's own sshd — the gateway forwards but offers no shell of its
-own, and the container's key is never disclosed:
+session), and returns a private key plus a ready-to-use `ssh_config`. The config's jump
+host tunnels to the gateway over `wss://.../gateway-ssh` (via `websocat`), then
+`ProxyJump`s into the container's own sshd — the gateway forwards but offers no shell of
+its own, and the container's key is never disclosed. Requires `websocat` on your PATH:
 
 ```sh
-# save private_key to lava-shell-<id>.key (chmod 600), then:
-ssh -i lava-shell-<id>.key \
-  -o ProxyJump=<session_id>@<gateway-host>:2222 \
-  -p <reverse_port> root@127.0.0.1
+# save private_key to lava-shell-<id>.key (chmod 600) and ssh_config to
+# lava-shell-<id>.conf, then:
+ssh -F lava-shell-<id>.conf board-<id>
 ```
 
 ```mermaid
@@ -197,9 +202,9 @@ sequenceDiagram
     Human->>MCP: attach_shell(session_id)
     Note over MCP: mint ephemeral human key; authorise it<br/>at the gateway AND in the container
     MCP->>Board: append human key to authorized_keys<br/>(over the session)
-    MCP-->>Human: private key + ssh (ProxyJump) command
+    MCP-->>Human: private key + ssh_config (websocat + ProxyJump)
 
-    Human->>MCP: ssh -J session@gateway (human key)
+    Human->>MCP: ssh -F conf (wss via websocat, human key)
     Note over MCP: human role — allow direct-tcpip to<br/>127.0.0.1:reverse_port only
     MCP->>Board: tunnel to the container sshd
     Human->>Board: authenticate as root (human key) → PTY
@@ -238,8 +243,9 @@ Flow:
    LAVA drives the boot, and dials **out** (`ssh -R`) to the gateway. When your
    console-ready test echoes the sentinel (`LAVA_MCP_CONSOLE_WRITABLE`), the proxy
    enables writes.
-3. `attach_console(session_id)` returns an `ssh -W` command (wrap with `socat` for a raw
-   PTY) — you get the live UART, bridged through the gateway on a loopback-only port.
+3. `attach_console(session_id)` returns an `ssh -W` command that tunnels to the gateway
+   over `wss://.../gateway-ssh` (via `websocat`; wrap with `socat` for a raw PTY) — you
+   get the live UART, bridged through the gateway on a loopback-only port.
 4. `close_console_session(session_id)` revokes access; ending the job tears down the proxy.
 
 ```mermaid
@@ -252,10 +258,10 @@ sequenceDiagram
     Human->>MCP: open_console_session() → job_environment
     Note over Human: embed in a deploy+boot job<br/>with the services block, submit
     Proxy->>Ser2net: connect to the console (read-only)
-    Proxy->>MCP: dial out ssh -R (loopback reverse port)
+    Proxy->>MCP: dial out ssh -R over wss (websocat, loopback reverse port)
     Note over Proxy: console-ready sentinel → enable writes
     Human->>MCP: attach_console(session_id) → ssh -W command
-    Human->>MCP: ssh -W 127.0.0.1:reverse_port (human key)
+    Human->>MCP: ssh -W (wss via websocat, human key)
     MCP->>Proxy: tunnel to the relay
     loop live serial console
         Human->>Ser2net: keystrokes (via gateway → proxy)
@@ -279,7 +285,7 @@ test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
 | `LAVA_MCP_TRANSPORT` | `--transport` | `stdio` (default) or `streamable-http` |
 | `LAVA_MCP_HOST` / `LAVA_MCP_PORT` | `--host` / `--port` | HTTP bind (hosted mode) |
 | `LAVA_MCP_GATEWAY_ENABLED` | `--gateway` | Enable interactive SSH board-session gateway |
-| `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | SSH gateway port (default 2222) |
+| `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | Internal loopback asyncssh port the WS bridge relays to (default 2222) |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | Host containers dial back to |
 | `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | Advertised `wss://host/gateway-ssh` URL; carries the gateway SSH over WebSocket/TLS via Caddy (requires `websocat` on clients). Empty = direct dial |
 | `LAVA_MCP_GATEWAY_WS_PORT` | — | Bridge listen port Caddy proxies `/gateway-ssh` to (default 8022) |

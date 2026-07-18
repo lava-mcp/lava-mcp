@@ -381,14 +381,16 @@ class Gateway:
 
     async def _start_server(self) -> None:
         host_key = asyncssh.generate_private_key("ssh-ed25519")
+        # The gateway is WebSocket-only: clients reach it exclusively through the WS
+        # bridge, which connects here over loopback. Bind asyncssh to loopback so it
+        # is never directly reachable off-host — the bridge is the only front door.
         self._server = await asyncssh.create_server(
             lambda: _GatewaySSHServer(self.manager, self._allow_networks),
-            self.config.gateway_bind,
+            "127.0.0.1",
             self.config.gateway_port,
             server_host_keys=[host_key],
         )
-        if self.config.gateway_ws_port:
-            await self._start_ws_bridge()
+        await self._start_ws_bridge()
 
     async def _start_ws_bridge(self) -> None:
         """Front the SSH listener with a WebSocket bridge (wss://.../gateway-ssh).
@@ -486,8 +488,8 @@ class Gateway:
         """Mint an ephemeral keypair and authorise it for human access to a session.
 
         The key is authorised for ``gateway_human_key_ttl`` seconds only. Returns the
-        private key plus the coordinates a human needs to connect (via ``ssh -W``
-        through the gateway). The board/console key is never disclosed.
+        private key plus the coordinates a human needs to connect (over the WebSocket
+        transport via websocat). The board/console key is never disclosed.
         """
         session = self.manager.get(session_id)
         if session is None:
@@ -495,15 +497,13 @@ class Gateway:
         private, public = generate_keypair()
         expires = session.authorize_human(public, ttl=self.config.gateway_human_key_ttl)
         advertise_host = self.config.gateway_advertise_host or self.config.host
-        advertise_port = self.config.gateway_advertise_port or self.config.gateway_port
         return {
             "session_id": session_id,
             "private_key": private,
             "public_key": public,
+            # gateway_host is only the ssh user@host label; humans tunnel to the
+            # gateway over this wss:// URL (443) via websocat.
             "gateway_host": advertise_host,
-            "gateway_port": advertise_port,
-            # when set, humans tunnel to the gateway over this wss:// URL (443) via
-            # websocat, instead of dialling gateway_port directly
             "gateway_ws_url": self.config.gateway_ws_url,
             "reverse_port": session.reverse_port,
             "kind": session.kind,

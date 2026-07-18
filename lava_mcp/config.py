@@ -46,24 +46,29 @@ class Config:
     # listener) starts once, not per request.
     json_response: bool = True
     stateless_http: bool = False
-    # interactive SSH gateway (only used in hosted mode)
+    # interactive SSH gateway (only used in hosted mode). The gateway is
+    # WebSocket-only: the asyncssh listener binds loopback (internal) and is reached
+    # exclusively through the WebSocket bridge below.
     gateway_enabled: bool = False
+    # gateway_bind is the WS bridge bind (Caddy reaches it on the container network);
+    # gateway_port is the internal loopback asyncssh port the bridge relays to.
     gateway_bind: str = "0.0.0.0"
     gateway_port: int = 2222
-    # host/port the in-job container should dial back to (advertised in jobs)
+    # host the in-job container's ssh user@host label uses (advertised in jobs)
     gateway_advertise_host: str | None = None
     gateway_advertise_port: int | None = None
-    # WebSocket transport for the SSH gateway. The dial-out/consumer SSH streams
-    # are carried over wss://.../gateway-ssh (443, via Caddy). The bridge listens on
-    # gateway_ws_port (Caddy proxies /gateway-ssh to it) and relays bytes to the
-    # loopback asyncssh listener. gateway_ws_url is the advertised wss:// URL handed
-    # to jobs and humans; when empty the WS transport is disabled and clients dial
-    # gateway_port directly.
+    # WebSocket transport for the SSH gateway. The dial-out/consumer SSH streams are
+    # carried over wss://.../gateway-ssh (443, via Caddy) — the only supported
+    # transport. The bridge listens on gateway_ws_port (Caddy proxies /gateway-ssh to
+    # it) and relays bytes to the loopback asyncssh listener. gateway_ws_url is the
+    # advertised wss:// URL handed to jobs and humans; the interactive tools refuse
+    # when it is unset (there is no direct-dial fallback).
     gateway_ws_port: int = 8022
     gateway_ws_url: str = ""
     # optional gateway access control (all empty = open). The general LAVA-proxy tools
     # are never gated here — they are equivalent to using one's own LAVA token.
-    #  - allow_ips: source IPs/CIDRs permitted to connect to the SSH gateway (2222)
+    #  - allow_ips: source IPs/CIDRs permitted to reach the gateway (checked at the WS
+    #    bridge against Caddy's forwarded client IP)
     #  - http_allow_users: LAVA usernames (via whoami) permitted to use the interactive
     #    "use" tools (open/run/close/list session, open console, support check)
     #  - ssh_allow_users: usernames permitted to use the "attach" tools that hand out

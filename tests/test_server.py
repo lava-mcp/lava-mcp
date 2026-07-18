@@ -6,12 +6,15 @@ import pytest
 
 from lava_mcp.config import Config
 from lava_mcp.server import (
+    _WS_NOT_CONFIGURED,
     _enforce_user_allowlist,
     _lava_username,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
+    build_console_ssh_command,
     build_server,
+    build_shell_ssh_config,
 )
 
 
@@ -130,3 +133,31 @@ def test_enforce_user_allowlist() -> None:
         _enforce_user_allowlist("mallory", ("alice", "bob"))
     with pytest.raises(PermissionError):
         _enforce_user_allowlist(None, ("alice",))
+
+
+def test_build_shell_ssh_config_tunnels_over_websocat() -> None:
+    ws = "wss://lava.example.com/gateway-ssh"
+    conf = build_shell_ssh_config("s-abc", "k.key", ws, 45678, "root")
+    # the jump host reaches the gateway only over the WebSocket transport
+    assert f"ProxyCommand websocat -b {ws}" in conf
+    # ProxyJump then rides the reverse tunnel to the board container's sshd
+    assert "ProxyJump gw-s-abc" in conf
+    assert "Port 45678" in conf
+    assert "User root" in conf
+    # no direct-dial SSH port anywhere (WebSocket-only)
+    assert "-p " not in conf
+    assert "Port 22\n" not in conf
+
+
+def test_build_console_ssh_command_tunnels_over_websocat() -> None:
+    ws = "wss://lava.example.com/gateway-ssh"
+    cmd = build_console_ssh_command("s-xyz", "k.key", ws, 33333, "gw.example.com")
+    assert f"ProxyCommand=websocat -b {ws}" in cmd
+    assert "-W 127.0.0.1:33333" in cmd
+    assert "s-xyz@gw.example.com" in cmd
+    # WebSocket-only: no `-p <port>` direct gateway dial
+    assert "-p " not in cmd
+
+
+def test_ws_not_configured_message_names_the_env_var() -> None:
+    assert "LAVA_MCP_GATEWAY_WS_URL" in _WS_NOT_CONFIGURED

@@ -23,6 +23,63 @@ from .config import Config
 from .gateway import Gateway
 from .jobs import build_interactive_job
 
+# The interactive gateway is WebSocket-only: the dial-out containers and human
+# clients reach it exclusively over wss://.../gateway-ssh (via websocat). Without an
+# advertised URL there is no way to connect, so the tools that hand out connect
+# details refuse rather than emit something unusable.
+_WS_NOT_CONFIGURED = (
+    "interactive gateway WebSocket URL is not configured; set "
+    "LAVA_MCP_GATEWAY_WS_URL (e.g. wss://host/gateway-ssh)"
+)
+
+
+def build_shell_ssh_config(
+    session_id: str,
+    key_file: str,
+    ws_url: str,
+    reverse_port: int,
+    container_user: str,
+) -> str:
+    """ssh config for a container shell over the WebSocket transport.
+
+    The jump host tunnels to the gateway over wss:// via websocat; ProxyJump then
+    reaches the board container's sshd on its loopback reverse port. ``ssh -F <conf>
+    board-<id>`` gives the shell.
+    """
+    return (
+        f"Host gw-{session_id}\n"
+        f"    User {session_id}\n"
+        f"    IdentityFile {key_file}\n"
+        f"    ProxyCommand websocat -b {ws_url}\n"
+        f"    StrictHostKeyChecking no\n"
+        f"    UserKnownHostsFile /dev/null\n"
+        f"Host board-{session_id}\n"
+        f"    HostName 127.0.0.1\n"
+        f"    Port {reverse_port}\n"
+        f"    User {container_user}\n"
+        f"    IdentityFile {key_file}\n"
+        f"    ProxyJump gw-{session_id}\n"
+        f"    StrictHostKeyChecking no\n"
+        f"    UserKnownHostsFile /dev/null\n"
+    )
+
+
+def build_console_ssh_command(
+    session_id: str,
+    key_file: str,
+    ws_url: str,
+    reverse_port: int,
+    gateway_host: str,
+) -> str:
+    """``ssh -W`` command that tunnels to a console session over the WebSocket
+    transport (websocat ProxyCommand to the gateway, then -W to the reverse port)."""
+    return (
+        f"ssh -i {key_file} -o StrictHostKeyChecking=no "
+        f"-o UserKnownHostsFile=/dev/null "
+        f"-o 'ProxyCommand=websocat -b {ws_url}' "
+        f"-W 127.0.0.1:{reverse_port} {session_id}@{gateway_host}"
+    )
+
 
 def _lava_username(whoami: Any) -> str | None:
     """Pull the LAVA username out of a ``system/whoami/`` response."""
@@ -329,6 +386,8 @@ def build_server(config: Config) -> FastMCP:
             via run_in_session.
             """
             user = require_user(config.http_allow_users)
+            if not config.gateway_ws_url:
+                return {"error": _WS_NOT_CONFIGURED}
             _require_remote_access_device(
                 client(), device_type, config.remote_access_tag
             )
@@ -403,6 +462,8 @@ def build_server(config: Config) -> FastMCP:
             disclosed; the gateway itself offers no shell.
             """
             user = require_user(config.ssh_allow_users)
+            if not config.gateway_ws_url:
+                return {"error": _WS_NOT_CONFIGURED}
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.get(session_id)
             if session is None:
@@ -427,55 +488,27 @@ def build_server(config: Config) -> FastMCP:
             if push.get("exit_status") not in (0, None):
                 return {"error": "failed to authorise key in container", "detail": push}
             key_file = f"lava-shell-{session_id}.key"
-            ws_url = info.get("gateway_ws_url")
-            result: dict[str, Any] = {
+            conf_file = f"lava-shell-{session_id}.conf"
+            config_text = build_shell_ssh_config(
+                session_id,
+                key_file,
+                info["gateway_ws_url"],
+                info["reverse_port"],
+                session.container_user,
+            )
+            return {
                 "session_id": session_id,
                 "private_key": info["private_key"],
                 "expires_in": info["expires_in"],
-            }
-            if ws_url:
-                # Tunnel the jump-host hop over wss:// (443) via websocat. An ssh
-                # config keeps the nested ProxyJump + ProxyCommand readable;
-                # `ssh -F <conf> board` gives the shell.
-                conf_file = f"lava-shell-{session_id}.conf"
-                config_text = (
-                    f"Host gw-{session_id}\n"
-                    f"    User {session_id}\n"
-                    f"    IdentityFile {key_file}\n"
-                    f"    ProxyCommand websocat -b {ws_url}\n"
-                    f"    StrictHostKeyChecking no\n"
-                    f"    UserKnownHostsFile /dev/null\n"
-                    f"Host board-{session_id}\n"
-                    f"    HostName 127.0.0.1\n"
-                    f"    Port {info['reverse_port']}\n"
-                    f"    User {session.container_user}\n"
-                    f"    IdentityFile {key_file}\n"
-                    f"    ProxyJump gw-{session_id}\n"
-                    f"    StrictHostKeyChecking no\n"
-                    f"    UserKnownHostsFile /dev/null\n"
-                )
-                result["ssh_config"] = config_text
-                result["ssh_command"] = f"ssh -F {conf_file} board-{session_id}"
-                result["note"] = (
+                "ssh_config": config_text,
+                "ssh_command": f"ssh -F {conf_file} board-{session_id}",
+                "note": (
                     f"save private_key to {key_file} (chmod 600) and ssh_config to "
                     f"{conf_file}, then run ssh_command for a shell. Requires "
                     "`websocat` on your PATH. Your source IP must be inside "
                     "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                )
-            else:
-                result["ssh_command"] = (
-                    f"ssh -i {key_file} -o StrictHostKeyChecking=no "
-                    f"-o UserKnownHostsFile=/dev/null "
-                    f"-o ProxyJump={session_id}@{info['gateway_host']}:"
-                    f"{info['gateway_port']} "
-                    f"-p {info['reverse_port']} {session.container_user}@127.0.0.1"
-                )
-                result["note"] = (
-                    f"save private_key to {key_file} (chmod 600), then run "
-                    "ssh_command for a shell. Your source IP must be inside "
-                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                )
-            return result
+                ),
+            }
 
         # -- serial console (Mode 2: ser2net proxy via LAVA Test Services) ----
         @mcp.tool()
@@ -511,12 +544,13 @@ def build_server(config: Config) -> FastMCP:
             connects, call ``attach_console(session_id)`` for a connect command.
             """
             user = require_user(config.http_allow_users)
+            if not config.gateway_ws_url:
+                return {"error": _WS_NOT_CONFIGURED}
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.create(
                 device_type=device_type, kind="console", owner=user
             )
             advertise_host = config.gateway_advertise_host or config.host
-            advertise_port = config.gateway_advertise_port or config.gateway_port
             # a compose .env cannot hold the multi-line PEM, so base64 it (single line);
             # the proxy's connect script decodes it.
             key_b64 = base64.b64encode(session.private_key.encode()).decode()
@@ -524,9 +558,9 @@ def build_server(config: Config) -> FastMCP:
                 "session_id": session.session_id,
                 "reverse_port": session.reverse_port,
                 "job_environment": {
+                    # GATEWAY_HOST is the ssh user@host label; the console dial-out
+                    # tunnels over GATEWAY_WS_URL (wss://, 443) via websocat.
                     "GATEWAY_HOST": advertise_host,
-                    "GATEWAY_PORT": str(advertise_port),
-                    # tunnel the console dial-out over wss:// (443) when configured
                     "GATEWAY_WS_URL": config.gateway_ws_url,
                     "SESSION_ID": session.session_id,
                     "REVERSE_PORT": str(session.reverse_port),
@@ -544,6 +578,8 @@ def build_server(config: Config) -> FastMCP:
             job emits console-ready.
             """
             user = require_user(config.ssh_allow_users)
+            if not config.gateway_ws_url:
+                return {"error": _WS_NOT_CONFIGURED}
             await asyncio.to_thread(gateway.ensure_started)
             session = gateway.manager.get(session_id)
             if session is None:
@@ -553,28 +589,17 @@ def build_server(config: Config) -> FastMCP:
                 return {"error": f"session {session_id} is not a console session"}
             info = gateway.attach_human(session_id)
             key_file = f"lava-console-{session_id}.key"
-            ws_url = info.get("gateway_ws_url")
-            if ws_url:
-                # tunnel the gateway hop over wss:// (443) via websocat ProxyCommand
-                ssh = (
-                    f"ssh -i {key_file} -o StrictHostKeyChecking=no "
-                    f"-o UserKnownHostsFile=/dev/null "
-                    f"-o 'ProxyCommand=websocat -b {ws_url}' "
-                    f"-W 127.0.0.1:{info['reverse_port']} {session_id}@{info['gateway_host']}"
-                )
-                note = (
-                    "Requires `websocat` on your PATH. Your source IP must be inside "
-                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                )
-            else:
-                ssh = (
-                    f"ssh -i {key_file} -p {info['gateway_port']} "
-                    f"-W 127.0.0.1:{info['reverse_port']} "
-                    f"{session_id}@{info['gateway_host']}"
-                )
-                note = (
-                    "Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                )
+            ssh = build_console_ssh_command(
+                session_id,
+                key_file,
+                info["gateway_ws_url"],
+                info["reverse_port"],
+                info["gateway_host"],
+            )
+            note = (
+                "Requires `websocat` on your PATH. Your source IP must be inside "
+                "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+            )
             return {
                 "session_id": session_id,
                 "private_key": info["private_key"],

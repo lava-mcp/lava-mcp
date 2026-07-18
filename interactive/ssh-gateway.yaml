@@ -14,7 +14,6 @@ metadata:
 
 params:
   GATEWAY_HOST: ""
-  GATEWAY_PORT: ""
   GATEWAY_WS_URL: ""
   SESSION_ID: ""
   REVERSE_PORT: ""
@@ -26,5 +25,5 @@ run:
     # LAVA writes job parameters as plain shell vars (not exported) at the top of
     # run.sh. lava-gateway-connect is a child process, so export them first or it
     # won't inherit them.
-    - export GATEWAY_HOST GATEWAY_PORT GATEWAY_WS_URL SESSION_ID REVERSE_PORT SESSION_PRIVATE_KEY SESSION_PUBLIC_KEY
+    - export GATEWAY_HOST GATEWAY_WS_URL SESSION_ID REVERSE_PORT SESSION_PRIVATE_KEY SESSION_PUBLIC_KEY
     - lava-gateway-connect

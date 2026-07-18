@@ -17,8 +17,9 @@ export CONSOLE_LISTEN_PORT
 # gated console relay in the background (listens on CONSOLE_LISTEN_PORT)
 python3 /console-proxy.py &
 
-if [ -z "${GATEWAY_HOST:-}" ] || [ -z "${SESSION_ID:-}" ] \
-   || [ -z "${REVERSE_PORT:-}" ] || [ -z "${SESSION_PRIVATE_KEY_B64:-}" ]; then
+if [ -z "${GATEWAY_HOST:-}" ] || [ -z "${GATEWAY_WS_URL:-}" ] \
+   || [ -z "${SESSION_ID:-}" ] || [ -z "${REVERSE_PORT:-}" ] \
+   || [ -z "${SESSION_PRIVATE_KEY_B64:-}" ]; then
   echo "ser2net-proxy: no gateway session configured — relay only (no dial-out)"
   wait
 fi
@@ -27,17 +28,11 @@ mkdir -p /root/.ssh && chmod 700 /root/.ssh
 printf '%s' "$SESSION_PRIVATE_KEY_B64" | base64 -d > /root/.ssh/session_key
 chmod 600 /root/.ssh/session_key
 
-# Transport: prefer the WebSocket tunnel (wss://.../gateway-ssh over 443) via
-# websocat as an ssh ProxyCommand. Fall back to a direct dial of GATEWAY_PORT when
-# GATEWAY_WS_URL is unset. Held in $@ so the ProxyCommand value (with its space)
-# stays one ssh argument.
-if [ -n "${GATEWAY_WS_URL:-}" ]; then
-  set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
-  echo "ser2net-proxy: transport = websocket (${GATEWAY_WS_URL})"
-else
-  set -- -p "${GATEWAY_PORT:-2222}"
-  echo "ser2net-proxy: transport = direct ssh (${GATEWAY_HOST}:${GATEWAY_PORT:-2222})"
-fi
+# The console dial-out tunnels over the WebSocket transport (wss://.../gateway-ssh,
+# 443, via Caddy) using websocat as an ssh ProxyCommand. Held in $@ so the
+# ProxyCommand value (with its space) stays one ssh argument.
+set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
+echo "ser2net-proxy: transport = websocket (${GATEWAY_WS_URL})"
 
 echo "ser2net-proxy: dialing gateway as ${SESSION_ID}" \
      "(reverse ${REVERSE_PORT} -> localhost:${CONSOLE_LISTEN_PORT})"
