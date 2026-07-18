@@ -29,11 +29,17 @@ context:
 # SER2NET_NETWORK is the external Docker network the console server sits on (used by
 # docker-compose.yml; ignored by the host-networking variant). CONSOLE_READY_SENTINEL
 # must match the string echoed by the console-ready test below.
+#
+# ALSO add the values open_console_session returns to this same block (they tell the
+# proxy how to dial back): GATEWAY_HOST, GATEWAY_WS_URL, SESSION_ID, REVERSE_PORT,
+# SESSION_PRIVATE_KEY_B64. They are per-session, so add them at submit time.
 environment:
   SER2NET_NETWORK: lava-dispatcher_default
   SER2NET_HOST: ser2net
   SER2NET_PORT: "7095"
   CONSOLE_READY_SENTINEL: LAVA_MCP_CONSOLE_WRITABLE
+  # + GATEWAY_HOST / GATEWAY_WS_URL / SESSION_ID / REVERSE_PORT / SESSION_PRIVATE_KEY_B64
+  #   from open_console_session
 
 actions:
 # Start the console proxy first, before deploy/boot, so it can watch the console from

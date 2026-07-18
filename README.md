@@ -180,8 +180,13 @@ This is command-at-a-time execution over the gateway, not a live PTY.
 
 ### Interactive SSH shell for humans (`attach_shell`)
 
-For a live PTY on the board — not command-at-a-time — call `attach_shell(session_id)`.
-It mints a short-lived keypair, authorises it **both** at the gateway (for the tunnel)
+For a live PTY in the board's **container** — not command-at-a-time — call
+`attach_shell(session_id)`. This is the interactive form of a board session: a shell
+*next to* the board (not on it), for controlling how the board is driven from the host
+— trying different flashing software/versions, custom fastboot/qdl/adb sequences, or
+deeper USB debugging of a board that won't boot. (For the board's own console, use
+`attach_console`.) It mints a short-lived keypair, authorises it **both** at the gateway
+(for the tunnel)
 and inside the board container (appended to its `authorized_keys` over the existing
 session), and returns a private key plus a ready-to-use `ssh_config`. The config's jump
 host tunnels to the gateway over `wss://.../mcp/gateway-ssh` (via `websocat`), then
@@ -233,6 +238,18 @@ is `telnet <ser2net-host> <port>`), and LAVA drives boot over that same console.
 the board* (no device-attached container), so the in-lab foothold comes from a **LAVA
 Test Services** container (`interactive/ser2net-proxy/`) instead. It needs
 `allow_test_services: true` in the device dict (check with `check_serial_console_support`).
+
+**Reach for the console** to interact with the booted board directly — drive tests and
+run commands live at the console *without writing a LAVA test definition*, watch the
+boot, or work with the bootloader/login prompt — whereas a board session (`attach_shell`)
+is for host-side work *next to* the board (flashing, fastboot/adb/qdl, USB debugging).
+
+**Don't hand-author the deploy+boot job** — getting boot right per device is hard. Start
+from a job that already boots this device and adapt it: `get_job_definition` of a recent
+successful job for the device, or its **health-check job** (`get_device` →
+`last_health_report_job` → `get_job_definition`). Keep its deploy+boot actions, then add
+the console proxy on top. A ready template ships at
+[`interactive/ser2net-proxy/test-job-qcs615.yaml`](interactive/ser2net-proxy/test-job-qcs615.yaml).
 
 Flow:
 
