@@ -18,7 +18,7 @@
 #   SER2NET_HOST/PORT        console endpoint
 #   CONSOLE_LISTEN_PORT      port the relay listens on (reverse-forwarded to the gateway)
 #   CONSOLE_READY_SENTINEL   string that unlocks writes (match the job's echo)
-#   GATEWAY_HOST/PORT, SESSION_ID, REVERSE_PORT, SESSION_PRIVATE_KEY_B64  (dial-out)
+#   GATEWAY_HOST, GATEWAY_WS_URL, SESSION_ID, REVERSE_PORT, SESSION_PRIVATE_KEY_B64  (dial-out)
 services:
   ser2net-proxy:
     image: ghcr.io/mattface/lava-mcp/ser2net-proxy:latest
@@ -30,7 +30,7 @@ services:
       CONSOLE_LISTEN_PORT: ${CONSOLE_LISTEN_PORT:-2323}
       CONSOLE_READY_SENTINEL: ${CONSOLE_READY_SENTINEL:-LAVA_MCP_CONSOLE_WRITABLE}
       GATEWAY_HOST: ${GATEWAY_HOST:-}
-      GATEWAY_PORT: ${GATEWAY_PORT:-2222}
+      GATEWAY_WS_URL: ${GATEWAY_WS_URL:-}
       SESSION_ID: ${SESSION_ID:-}
       REVERSE_PORT: ${REVERSE_PORT:-}
       SESSION_PRIVATE_KEY_B64: ${SESSION_PRIVATE_KEY_B64:-}
