@@ -161,3 +161,16 @@ def test_build_console_ssh_command_tunnels_over_websocat() -> None:
 
 def test_ws_not_configured_message_names_the_env_var() -> None:
     assert "LAVA_MCP_GATEWAY_WS_URL" in _WS_NOT_CONFIGURED
+
+
+def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
+    """The server's instructions (surfaced to MCP clients) must explain both the
+    container-beside-the-board and the serial-console ways, and steer agents to base
+    the console deploy/boot on an existing job rather than authoring one."""
+    server = build_server(Config(url="https://x", gateway_enabled=True))
+    ins = server.instructions or ""
+    # both ways, and the on-board vs next-to-board distinction
+    assert "open_board_session" in ins and "open_console_session" in ins
+    assert "next to" in ins and "serial console" in ins.lower()
+    # console way uses LAVA to deploy+boot, seeded from an existing/health-check job
+    assert "get_job_definition" in ins and "health-check" in ins

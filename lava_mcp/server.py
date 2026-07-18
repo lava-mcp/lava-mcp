@@ -32,6 +32,38 @@ _WS_NOT_CONFIGURED = (
     "LAVA_MCP_GATEWAY_WS_URL (e.g. wss://host/gateway-ssh)"
 )
 
+# Surfaced to MCP clients (via the server's initialize response) so an agent
+# understands the two distinct ways to reach a board and when to use each.
+_SERVER_INSTRUCTIONS = """\
+This server proxies a LAVA board farm: query devices/jobs, submit and manage test
+jobs, and open interactive sessions to a board. General LAVA tools grant exactly
+what your own LAVA token grants.
+
+There are TWO different ways to get an interactive shell/console, for different jobs:
+
+1. Board session — a shell in a container running *next to* the board (on the
+   worker), NOT a shell on the board itself. Use it for host-side work against the
+   device: flashing, fastboot/adb, qdl, and bring-up. It needs the board's USB
+   exposed to the container. Tools: open_board_session -> run_in_session (run one
+   command) or attach_shell (interactive ssh). Only devices tagged for remote access
+   can host one.
+
+2. Serial console — the board's *own* serial console (UART): boot/kernel logs, the
+   login prompt, a shell on the booted board. Use it when you need what's actually on
+   the board, or console access with no DUT networking. Unlike a board session, this
+   path uses LAVA to DEPLOY and BOOT an image first; the server then adds a test
+   action that bridges the console out. Tools: check_serial_console_support ->
+   open_console_session -> attach_console.
+
+   Writing a correct deploy+boot LAVA job from scratch is hard. Do NOT hand-author
+   the boot flow — start from a job that already deploys and boots this device and
+   adapt it: fetch a recent successful job's definition with get_job_definition, or
+   use the device's health-check job (the last_health_report_job id from
+   get_device/list_devices, via get_job_definition). Keep its deploy+boot actions,
+   then add the ser2net-proxy services block and the environment values
+   open_console_session returns.
+"""
+
 
 def build_shell_ssh_config(
     session_id: str,
@@ -182,6 +214,7 @@ def build_server(config: Config) -> FastMCP:
     # the process.
     mcp = FastMCP(
         "lava",
+        instructions=_SERVER_INSTRUCTIONS,
         host=config.host,
         port=config.port,
         json_response=config.json_response,
@@ -399,12 +432,15 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds: int = 120,
             timeout_minutes: int = 60,
         ) -> Any:
-            """Reserve a board and open an interactive container session on it.
+            """Open a shell in a container running *next to* the board (not on it).
 
-            Submits a LAVA job (as your LAVA user) that runs a device-attached
-            container which dials back to this gateway over SSH. Waits up to
-            wait_seconds for the container to connect, then the session is usable
-            via run_in_session.
+            Way 1 of 2 (see also open_console_session for the board's own serial
+            console). Submits a LAVA job (as your LAVA user) that runs a
+            device-attached container on the worker, with the board's USB/serial
+            exposed — for flashing, fastboot/adb, qdl and bring-up. The container
+            dials back to this gateway over SSH; waits up to wait_seconds for it to
+            connect, then the session is usable via run_in_session / attach_shell.
+            Only devices tagged for remote access can host one.
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -436,7 +472,9 @@ def build_server(config: Config) -> FastMCP:
         async def run_in_session(
             session_id: str, command: str, timeout: int = 120
         ) -> Any:
-            """Run a shell command inside an open board session, returning output."""
+            """Run a shell command in the board session's container (next to the
+            board), returning output. The command runs in the device-attached
+            container, not on the board itself."""
             user = require_user(config.http_allow_users)
             session = gateway.manager.get(session_id)
             if session is None:
@@ -475,12 +513,14 @@ def build_server(config: Config) -> FastMCP:
 
         @mcp.tool()
         async def attach_shell(session_id: str) -> Any:
-            """Get an ssh command for an interactive shell in a board container.
+            """Get an ssh command for an interactive shell in the board's container.
 
-            Mints a short-lived key, authorises it both at the gateway and inside the
-            board container, and returns an ``ssh`` command that jumps through the
-            gateway into the container's shell. The container's own key is never
-            disclosed; the gateway itself offers no shell.
+            The interactive form of a board session (Way 1): a shell in the container
+            running *next to* the board, not on the board itself (use attach_console
+            for the board's serial console). Mints a short-lived key, authorises it
+            both at the gateway and inside the container, and returns an ``ssh``
+            command that jumps through the gateway into the container's shell. The
+            container's own key is never disclosed; the gateway itself offers no shell.
             """
             user = require_user(config.ssh_allow_users)
             if not config.gateway_ws_url:
@@ -555,14 +595,25 @@ def build_server(config: Config) -> FastMCP:
 
         @mcp.tool()
         async def open_console_session(device_type: str | None = None) -> Any:
-            """Reserve a serial-console session to embed in your own LAVA job (Mode 2).
+            """Reserve access to the board's own serial console (UART), for a LAVA job.
 
-            Mints a session the ser2net-proxy Test Services container dials back to over
-            the gateway. Returns values to add to your job's top-level ``environment:``
-            (LAVA writes them into the proxy's compose .env) so the proxy can dial out.
-            Add the ``interactive/ser2net-proxy`` services block to the same job and set
-            the ``SER2NET_*`` vars for your device. Once the job boots and the proxy
-            connects, call ``attach_console(session_id)`` for a connect command.
+            Way 2 of 2 (see also open_board_session for a shell in a container beside
+            the board). This reaches the board's actual console — boot/kernel logs, the
+            login prompt, a shell on the booted board — and works with no DUT
+            networking. Unlike a board session, this path relies on a LAVA job that
+            DEPLOYS and BOOTS an image; this call only reserves the console bridge.
+
+            You supply the deploy+boot job. Do NOT hand-author the boot flow — it is
+            hard to get right per device. Start from a job that already boots this
+            device and adapt it: get_job_definition of a recent successful job for the
+            device, or the device's health-check job (its last_health_report_job id
+            from get_device/list_devices). Keep that job's deploy+boot actions, then:
+            (1) add the ``interactive/ser2net-proxy`` services block, (2) add this
+            call's returned values to the job's top-level ``environment:`` (LAVA writes
+            them into the proxy's compose .env), and (3) set the ``SER2NET_*`` vars for
+            your device. Once the job boots and the proxy connects, call
+            ``attach_console(session_id)`` for a connect command. Requires the device
+            dict to allow Test Services (check_serial_console_support).
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -591,12 +642,13 @@ def build_server(config: Config) -> FastMCP:
 
         @mcp.tool()
         async def attach_console(session_id: str) -> Any:
-            """Get a command to attach to an open serial-console session as a human.
+            """Get a command to attach to the board's serial console (UART).
 
-            Mints a short-lived key authorised for this session and returns an
-            ``ssh -W`` command that tunnels to the board console through the gateway.
-            The board/proxy key is never disclosed. The console is read-only until the
-            job emits console-ready.
+            The interactive form of a console session (Way 2): the board's own console,
+            not a container shell (use attach_shell for that). Mints a short-lived key
+            authorised for this session and returns an ``ssh -W`` command that tunnels
+            to the console through the gateway. The board/proxy key is never disclosed.
+            The console is read-only until the job emits console-ready.
             """
             user = require_user(config.ssh_allow_users)
             if not config.gateway_ws_url:
