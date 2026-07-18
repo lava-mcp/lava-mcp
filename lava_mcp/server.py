@@ -82,6 +82,11 @@ There are TWO different ways to get an interactive shell/console, for different 
    add the console proxy on top. You do NOT need to find an example anywhere:
    open_console_session returns (in its `add_to_job` field) the exact `services` test
    action to paste in as the first action, plus the `environment:` values to set.
+   After submitting, poll check_console_ready(job_id) until ready:true (instead of
+   reading logs), then call attach_console.
+
+Handing out an SSH key (attach_shell/attach_console): the returned private_key must
+be saved to a file with `chmod 600` — ssh refuses a key file with looser permissions.
 """
 
 
@@ -153,6 +158,22 @@ def build_console_services_action(
         f"      repository: {interactive_repo}\n"
         "      path: interactive/ser2net-proxy/docker-compose.yml\n"
     )
+
+
+def console_ready_in_logs(logs_text: str, sentinel: str) -> bool:
+    """True once the board has echoed the console-ready ``sentinel`` in the job log.
+
+    The proxy flips the console from read-only to writable when it sees the sentinel
+    on the console; the same string lands in the job log as board output. Ignore the
+    ``CONSOLE_READY_SENTINEL=<sentinel>`` env declaration echoed at job start, which
+    is present from the very beginning and does not mean the board is up.
+    """
+    if not sentinel:
+        return False
+    for line in logs_text.splitlines():
+        if sentinel in line and "CONSOLE_READY_SENTINEL" not in line:
+            return True
+    return False
 
 
 def _lava_username(whoami: Any) -> str | None:
@@ -606,8 +627,9 @@ def build_server(config: Config) -> FastMCP:
                 "ssh_config": config_text,
                 "ssh_command": f"ssh -F {conf_file} board-{session_id}",
                 "note": (
-                    f"save private_key to {key_file} (chmod 600) and ssh_config to "
-                    f"{conf_file}, then run ssh_command for a shell. Requires "
+                    f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
+                    "REFUSES a key file with looser permissions — then save ssh_config "
+                    f"to {conf_file} and run ssh_command for a shell. Requires "
                     "`websocat` on your PATH. Your source IP must be inside "
                     "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
                 ),
@@ -712,10 +734,44 @@ def build_server(config: Config) -> FastMCP:
                         "shell — that flips the console to writable."
                     ),
                     "then": (
-                        "Submit the job; once it boots and the proxy dials in, call "
-                        "attach_console(session_id)."
+                        "Submit the job, then poll check_console_ready(job_id) until "
+                        "it returns ready:true (do NOT scrape logs yourself). Once "
+                        "ready, call attach_console(session_id) for a writable console."
                     ),
                 },
+            }
+
+        @mcp.tool()
+        def check_console_ready(
+            job_id: int, sentinel: str = "LAVA_MCP_CONSOLE_WRITABLE"
+        ) -> Any:
+            """Has a console job reached console-ready (writable) state yet?
+
+            Poll THIS instead of reading job logs yourself. It scans job_id's logs for
+            the CONSOLE_READY_SENTINEL your deploy+boot job echoes once the board boots
+            to a shell — the moment the ser2net-proxy flips the console from read-only
+            to writable. Returns {ready, job_state, job_health}: when ready is true,
+            attach_console gives a writable console; if job_state is Finished/Canceling
+            the board never signalled, so stop polling. Pass sentinel if your job set a
+            custom CONSOLE_READY_SENTINEL.
+            """
+            logs = client().get_job_logs(job_id)
+            ready = console_ready_in_logs(logs, sentinel)
+            job = client().get_job(job_id)
+            state = job.get("state") if isinstance(job, dict) else None
+            health = job.get("health") if isinstance(job, dict) else None
+            return {
+                "job_id": job_id,
+                "ready": ready,
+                "sentinel": sentinel,
+                "job_state": state,
+                "job_health": health,
+                "note": (
+                    "console is writable — call attach_console for a live console"
+                    if ready
+                    else "not writable yet; poll again. Stop if job_state is "
+                    "Finished/Canceling (the board never echoed the sentinel)."
+                ),
             }
 
         @mcp.tool()
@@ -748,8 +804,10 @@ def build_server(config: Config) -> FastMCP:
                 info["gateway_host"],
             )
             note = (
-                "Requires `websocat` on your PATH. Your source IP must be inside "
-                "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
+                "REFUSES a key file with looser permissions. Requires `websocat` on "
+                "your PATH. Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS "
+                "if set."
             )
             return {
                 "session_id": session_id,

@@ -16,6 +16,7 @@ from lava_mcp.server import (
     build_console_ssh_command,
     build_server,
     build_shell_ssh_config,
+    console_ready_in_logs,
 )
 
 
@@ -162,6 +163,19 @@ def test_build_console_ssh_command_tunnels_over_websocat() -> None:
 
 def test_ws_not_configured_message_names_the_env_var() -> None:
     assert "LAVA_MCP_GATEWAY_WS_URL" in _WS_NOT_CONFIGURED
+
+
+def test_console_ready_in_logs_ignores_env_declaration() -> None:
+    sentinel = "LAVA_MCP_CONSOLE_WRITABLE"
+    # the env var is echoed at job start — not readiness
+    env_only = '- {"lvl":"debug","msg":"- CONSOLE_READY_SENTINEL=' + sentinel + '"}\n'
+    assert console_ready_in_logs(env_only, sentinel) is False
+    # board echoing it as console output = ready
+    booted = env_only + '- {"lvl":"target","msg":"' + sentinel + '"}\n'
+    assert console_ready_in_logs(booted, sentinel) is True
+    # empty / absent
+    assert console_ready_in_logs("", sentinel) is False
+    assert console_ready_in_logs("no marker here", sentinel) is False
 
 
 def test_build_console_services_action_is_pasteable_and_uses_configured_repo() -> None:
