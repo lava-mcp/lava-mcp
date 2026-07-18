@@ -12,6 +12,7 @@ from lava_mcp.server import (
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
+    build_console_services_action,
     build_console_ssh_command,
     build_server,
     build_shell_ssh_config,
@@ -161,6 +162,20 @@ def test_build_console_ssh_command_tunnels_over_websocat() -> None:
 
 def test_ws_not_configured_message_names_the_env_var() -> None:
     assert "LAVA_MCP_GATEWAY_WS_URL" in _WS_NOT_CONFIGURED
+
+
+def test_build_console_services_action_is_pasteable_and_uses_configured_repo() -> None:
+    import yaml
+
+    repo = "https://github.com/example/lava-mcp.git"
+    block = build_console_services_action(repo)
+    # valid YAML the agent can paste straight into a job's actions list
+    parsed = yaml.safe_load(block)
+    assert isinstance(parsed, list) and len(parsed) == 1
+    svc = parsed[0]["test"]["services"][0]
+    assert svc["name"] == "ser2net-proxy"
+    assert svc["repository"] == repo
+    assert svc["path"] == "interactive/ser2net-proxy/docker-compose.yml"
 
 
 def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:

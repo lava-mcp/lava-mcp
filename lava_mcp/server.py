@@ -78,9 +78,10 @@ There are TWO different ways to get an interactive shell/console, for different 
    the boot flow — start from a job that already deploys and boots this device and
    adapt it: fetch a recent successful job's definition with get_job_definition, or
    use the device's health-check job (the last_health_report_job id from
-   get_device/list_devices, via get_job_definition). Keep its deploy+boot actions,
-   then add the ser2net-proxy services block and the environment values
-   open_console_session returns.
+   get_device/list_devices, via get_job_definition). Keep its deploy+boot actions and
+   add the console proxy on top. You do NOT need to find an example anywhere:
+   open_console_session returns (in its `add_to_job` field) the exact `services` test
+   action to paste in as the first action, plus the `environment:` values to set.
 """
 
 
@@ -129,6 +130,28 @@ def build_console_ssh_command(
         f"-o UserKnownHostsFile=/dev/null "
         f"-o 'ProxyCommand=websocat -b {ws_url}' "
         f"-W 127.0.0.1:{reverse_port} {session_id}@{gateway_host}"
+    )
+
+
+def build_console_services_action(
+    interactive_repo: str, timeout_minutes: int = 70
+) -> str:
+    """The LAVA ``services`` test action that runs the ser2net-proxy console bridge.
+
+    Returned by open_console_session so an agent can paste it straight into its
+    deploy+boot job (as the first action) — no need to hunt for an example in the
+    lava-mcp repo. The proxy image/scripts are fetched from ``interactive_repo``.
+    """
+    return (
+        "- test:\n"
+        "    namespace: console\n"
+        "    timeout:\n"
+        f"      minutes: {timeout_minutes}\n"
+        "    services:\n"
+        "    - name: ser2net-proxy\n"
+        "      from: git\n"
+        f"      repository: {interactive_repo}\n"
+        "      path: interactive/ser2net-proxy/docker-compose.yml\n"
     )
 
 
@@ -626,13 +649,14 @@ def build_server(config: Config) -> FastMCP:
             hard to get right per device. Start from a job that already boots this
             device and adapt it: get_job_definition of a recent successful job for the
             device, or the device's health-check job (its last_health_report_job id
-            from get_device/list_devices). Keep that job's deploy+boot actions, then:
-            (1) add the ``interactive/ser2net-proxy`` services block, (2) add this
-            call's returned values to the job's top-level ``environment:`` (LAVA writes
-            them into the proxy's compose .env), and (3) set the ``SER2NET_*`` vars for
-            your device. Once the job boots and the proxy connects, call
-            ``attach_console(session_id)`` for a connect command. Requires the device
-            dict to allow Test Services (check_serial_console_support).
+            from get_device/list_devices). Keep that job's deploy+boot actions and add
+            the console proxy on top.
+
+            You do NOT need to find an example in any repo: this call returns, in
+            ``add_to_job``, the exact ``services`` test action to paste in and the full
+            list of ``environment:`` values to set. Once the job boots and the proxy
+            connects, call ``attach_console(session_id)``. Requires the device dict to
+            allow Test Services (check_serial_console_support).
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -645,17 +669,52 @@ def build_server(config: Config) -> FastMCP:
             # a compose .env cannot hold the multi-line PEM, so base64 it (single line);
             # the proxy's connect script decodes it.
             key_b64 = base64.b64encode(session.private_key.encode()).decode()
+            job_environment = {
+                # GATEWAY_HOST is the ssh user@host label; the console dial-out
+                # tunnels over GATEWAY_WS_URL (wss://, 443) via websocat.
+                "GATEWAY_HOST": advertise_host,
+                "GATEWAY_WS_URL": config.gateway_ws_url,
+                "SESSION_ID": session.session_id,
+                "REVERSE_PORT": str(session.reverse_port),
+                "SESSION_PRIVATE_KEY_B64": key_b64,
+            }
             return {
                 "session_id": session.session_id,
                 "reverse_port": session.reverse_port,
-                "job_environment": {
-                    # GATEWAY_HOST is the ssh user@host label; the console dial-out
-                    # tunnels over GATEWAY_WS_URL (wss://, 443) via websocat.
-                    "GATEWAY_HOST": advertise_host,
-                    "GATEWAY_WS_URL": config.gateway_ws_url,
-                    "SESSION_ID": session.session_id,
-                    "REVERSE_PORT": str(session.reverse_port),
-                    "SESSION_PRIVATE_KEY_B64": key_b64,
+                "job_environment": job_environment,
+                "add_to_job": {
+                    "note": (
+                        "Everything to add to your deploy+boot LAVA job — no repo "
+                        "lookup needed."
+                    ),
+                    "step_1_services_action": build_console_services_action(
+                        config.interactive_repo
+                    ),
+                    "step_1_note": (
+                        "Add this as the FIRST action (before deploy/boot) so the proxy "
+                        "watches the console from the start of the job."
+                    ),
+                    "step_2_environment": (
+                        "Put job_environment (above) into the job's top-level "
+                        "`environment:`, plus these for your board: "
+                        "SER2NET_HOST (ser2net hostname, usually 'ser2net'); "
+                        "SER2NET_PORT (the board's ser2net port — read it from the "
+                        "device's connection_command, e.g. 'telnet ser2net 7095' -> "
+                        "7095, via get_device/get_device_dictionary); "
+                        "SER2NET_NETWORK (docker network ser2net is on, usually "
+                        "'lava-dispatcher_default'); "
+                        "CONSOLE_READY_SENTINEL (any string, e.g. "
+                        "LAVA_MCP_CONSOLE_WRITABLE)."
+                    ),
+                    "step_3_console_ready": (
+                        "The console is READ-ONLY until console-ready: have a test on "
+                        "the booted board echo CONSOLE_READY_SENTINEL once it reaches a "
+                        "shell — that flips the console to writable."
+                    ),
+                    "then": (
+                        "Submit the job; once it boots and the proxy dials in, call "
+                        "attach_console(session_id)."
+                    ),
                 },
             }
 
