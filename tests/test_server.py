@@ -169,6 +169,8 @@ def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
     the console deploy/boot on an existing job rather than authoring one."""
     server = build_server(Config(url="https://x", gateway_enabled=True))
     ins = server.instructions or ""
+    # defines what LAVA is for clients unfamiliar with it
+    assert "Linaro Automated Validation Architecture" in ins
     # both ways, and the on-board vs next-to-board distinction
     assert "open_board_session" in ins and "open_console_session" in ins
     assert "next to" in ins and "serial console" in ins.lower()

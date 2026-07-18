@@ -35,9 +35,15 @@ _WS_NOT_CONFIGURED = (
 # Surfaced to MCP clients (via the server's initialize response) so an agent
 # understands the two distinct ways to reach a board and when to use each.
 _SERVER_INSTRUCTIONS = """\
-This server proxies a LAVA board farm: query devices/jobs, submit and manage test
-jobs, and open interactive sessions to a board. General LAVA tools grant exactly
-what your own LAVA token grants.
+LAVA (Linaro Automated Validation Architecture) is a system for automated testing on
+real hardware: it schedules jobs onto physical devices ("boards") in a lab, deploys
+or flashes an OS image, boots it, and runs tests — all described by a YAML job
+definition. Boards are grouped by device-type; a job queues until a matching board is
+free. Results and logs are retrievable per job.
+
+This server proxies one LAVA instance: query devices/jobs, submit and manage test
+jobs, and open interactive sessions to a board. General LAVA tools grant exactly what
+your own LAVA token grants.
 
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
