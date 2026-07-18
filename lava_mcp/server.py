@@ -57,6 +57,14 @@ There are TWO different ways to get an interactive shell/console, for different 
    Tools: open_board_session -> run_in_session (run one command) or attach_shell
    (interactive ssh). Only devices tagged for remote access can host one.
 
+   The container is Debian and runs as root, so you can apt-get or build any tooling
+   at runtime. E.g. build qdl from source and detect the attached board (in EDL mode
+   it enumerates as vendor HS-USB QDLoader 05c6:9008):
+     apt-get update && apt-get install -y git build-essential pkg-config \\
+       libusb-1.0-0-dev libxml2-dev
+     git clone https://github.com/linux-msm/qdl && make -C qdl
+     lsusb | grep -i '05c6:9008'   # board present in EDL mode; qdl can now flash it
+
 2. Serial console — the board's *own* serial console (UART): boot/kernel logs, the
    login prompt, a shell on the booted board. Use it when you need what's actually on
    the board, or console access with no DUT networking. Reach for it to interact with

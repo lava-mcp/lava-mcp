@@ -8,6 +8,10 @@
 # Build & publish (override LAVA_MCP_INTERACTIVE_IMAGE if you host it elsewhere):
 #   docker build -t ghcr.io/mattface/lava-mcp/interactive:latest interactive/
 #   docker push  ghcr.io/mattface/lava-mcp/interactive:latest
+#
+# Debian base on purpose: a session can `apt-get install` or build any extra
+# tooling it needs at runtime (e.g. a newer/custom flashing tool from source).
+# The pre-installed set below just covers the common cases.
 FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,6 +24,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         picocom \
         ca-certificates \
         curl \
+        git \
         tar \
         iproute2 \
     && rm -rf /var/lib/apt/lists/*

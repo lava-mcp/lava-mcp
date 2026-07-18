@@ -124,6 +124,25 @@ The container image + test definition live in this repo under `interactive/`
 (published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
 the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 
+The container is **Debian** (running as root), so a session can `apt-get` or build
+whatever tooling it needs at runtime — you're not limited to what's pre-installed.
+For example, fetch and build `qdl` from source and detect the attached board (each
+line is a `run_in_session` call, or run them over `attach_shell`):
+
+```sh
+apt-get update && apt-get install -y git build-essential pkg-config \
+    libusb-1.0-0-dev libxml2-dev
+git clone https://github.com/linux-msm/qdl && make -C qdl
+# With the board in EDL (Emergency Download) mode it enumerates as
+# "vendor HS-USB QDLoader 9008" (05c6:9008) — confirm it's attached:
+lsusb | grep -i '05c6:9008'
+# the freshly built ./qdl/qdl can now flash it (prog + rawprogram/patch XMLs)
+```
+
+This is the point of the container-beside-the-board way: you control *how* the board
+is driven from the host — including trying a newer or custom flashing tool than the
+one baked into the image.
+
 Optional allowlists gate the interactive features (all default to open). The general
 LAVA-proxy tools are **never** gated here — they are equivalent to using your own LAVA
 token, so `/mcp` is usable by any token holder.
