@@ -96,6 +96,20 @@ be saved to a file with `chmod 600` — ssh refuses a key file with looser permi
 """
 
 
+def _build_instructions(config: Config) -> str:
+    """Server instructions, extended with the configured boot-template masters."""
+    ins = _SERVER_INSTRUCTIONS
+    if config.template_job_masters:
+        masters = ", ".join(config.template_job_masters)
+        ins += (
+            "\n\nBoot-template masters: the best deploy-URL-matching jobs usually live "
+            f"on these other LAVA masters, not this instance — search them too: "
+            f"{masters}. They typically hold production jobs with correct deploy URLs "
+            "and artifact authentication; prefer a URL-matched template from there."
+        )
+    return ins
+
+
 def build_shell_ssh_config(
     session_id: str,
     key_file: str,
@@ -322,7 +336,7 @@ def build_server(config: Config) -> FastMCP:
     # the process.
     mcp = FastMCP(
         "lava",
-        instructions=_SERVER_INSTRUCTIONS,
+        instructions=_build_instructions(config),
         host=config.host,
         port=config.port,
         json_response=config.json_response,

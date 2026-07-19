@@ -227,3 +227,27 @@ def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
     assert "Authorization" in ins
     # board-session container is Debian; includes a build-a-tool example
     assert "Debian" in ins and "linux-msm/qdl" in ins
+
+
+def test_template_job_masters_surface_in_instructions() -> None:
+    ins = (
+        build_server(
+            Config(url="https://x", template_job_masters=("https://lava.example.com",))
+        ).instructions
+        or ""
+    )
+    assert "Boot-template masters" in ins and "lava.example.com" in ins
+    # absent when not configured
+    ins2 = build_server(Config(url="https://x")).instructions or ""
+    assert "Boot-template masters" not in ins2
+
+
+def test_config_reads_template_job_masters(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "LAVA_MCP_TEMPLATE_JOB_MASTERS", "https://lava.infra.foundries.io https://other"
+    )
+    cfg = Config.from_env()
+    assert cfg.template_job_masters == (
+        "https://lava.infra.foundries.io",
+        "https://other",
+    )
