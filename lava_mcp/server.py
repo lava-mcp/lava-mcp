@@ -160,6 +160,45 @@ def build_console_services_action(
     )
 
 
+def build_console_ready_action(
+    sentinel: str = "LAVA_MCP_CONSOLE_WRITABLE",
+    timeout_minutes: int = 60,
+    namespace: str = "boot",
+) -> str:
+    """LAVA test action that signals console-ready then hands the console to the user.
+
+    Add as the LAST action, after deploy+boot brings the board to a shell. It echoes
+    ``sentinel`` to the console (which unlocks the ser2net-proxy from read-only) and
+    then execs an interactive shell that blocks — holding the job open so the user can
+    work. LAVA tolerates a silent console (a test-shell expect timeout just loops), so
+    NO keepalive/tick output is needed; the action ``timeout`` (set it to your job
+    length) bounds the hold. The user ends the session by exiting the shell (Ctrl-D).
+    ``namespace``/``connection-namespace`` MUST match your boot action's namespace so
+    the step runs over the booted serial console.
+    """
+    return (
+        "- test:\n"
+        f"    namespace: {namespace}\n"
+        f"    connection-namespace: {namespace}\n"
+        "    timeout:\n"
+        f"      minutes: {timeout_minutes}\n"
+        "    definitions:\n"
+        "    - from: inline\n"
+        "      name: console-ready\n"
+        "      path: inline/console-ready.yaml\n"
+        "      repository:\n"
+        "        metadata:\n"
+        "          format: Lava-Test Test Definition 1.0\n"
+        "          name: console-ready\n"
+        "          description: signal console-ready, then hand the console to the user\n"
+        "        run:\n"
+        "          steps:\n"
+        "          - lava-test-case console-ready --result pass\n"
+        f"          - 'echo \"{sentinel}\"'\n"
+        "          - 'exec \"$(command -v bash || command -v sh)\" -i'\n"
+    )
+
+
 def console_ready_in_logs(logs_text: str, sentinel: str) -> bool:
     """True once the board has echoed the console-ready ``sentinel`` in the job log.
 
@@ -707,7 +746,7 @@ def build_server(config: Config) -> FastMCP:
                 "add_to_job": {
                     "note": (
                         "Everything to add to your deploy+boot LAVA job — no repo "
-                        "lookup needed."
+                        "lookup or example needed. Two actions + the environment."
                     ),
                     "step_1_services_action": build_console_services_action(
                         config.interactive_repo
@@ -725,13 +764,18 @@ def build_server(config: Config) -> FastMCP:
                         "7095, via get_device/get_device_dictionary); "
                         "SER2NET_NETWORK (docker network ser2net is on, usually "
                         "'lava-dispatcher_default'); "
-                        "CONSOLE_READY_SENTINEL (any string, e.g. "
+                        "CONSOLE_READY_SENTINEL (must match the echo in step 3, e.g. "
                         "LAVA_MCP_CONSOLE_WRITABLE)."
                     ),
-                    "step_3_console_ready": (
-                        "The console is READ-ONLY until console-ready: have a test on "
-                        "the booted board echo CONSOLE_READY_SENTINEL once it reaches a "
-                        "shell — that flips the console to writable."
+                    "step_3_console_ready_action": build_console_ready_action(),
+                    "step_3_note": (
+                        "Add this as the LAST action (after deploy+boot reaches a "
+                        "shell). It echoes CONSOLE_READY_SENTINEL to unlock the "
+                        "read-only console, then hands you an interactive shell that "
+                        "holds the job open. Set its `timeout.minutes` to your job "
+                        "length and its `namespace`/`connection-namespace` to match "
+                        "your boot action. LAVA tolerates a silent console, so no "
+                        "keepalive is needed; end the session by exiting the shell."
                     ),
                     "then": (
                         "Submit the job, then poll check_console_ready(job_id) until "

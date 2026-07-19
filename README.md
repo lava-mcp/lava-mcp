@@ -267,8 +267,9 @@ is for host-side work *next to* the board (flashing, fastboot/adb/qdl, USB debug
 from a job that already boots this device and adapt it: `get_job_definition` of a recent
 successful job for the device, or its **health-check job** (`get_device` →
 `last_health_report_job` → `get_job_definition`). Keep its deploy+boot actions, then add
-the console proxy on top. A ready template ships at
-[`interactive/ser2net-proxy/test-job-qcs615.yaml`](interactive/ser2net-proxy/test-job-qcs615.yaml).
+the console proxy on top. You don't need an example: `open_console_session` returns the
+exact `services` action, the console-ready action, and the `environment:` values to add
+(its `add_to_job` field).
 
 Flow:
 
@@ -307,9 +308,10 @@ sequenceDiagram
     Human->>MCP: close_console_session(session_id)
 ```
 
-**Console handoff** wrinkle: ser2net must allow the proxy's concurrent connection (or the
-job idles after boot so LAVA releases the console). Confirmed working on staging. A ready
-test job is in `interactive/ser2net-proxy/test-job-qcs615.yaml`.
+**Console handoff** wrinkle: ser2net must allow the proxy's concurrent connection. The
+console-ready action `open_console_session` returns holds the job open with an
+interactive shell (LAVA tolerates a silent console — a test-shell expect timeout just
+loops — so no keepalive is needed); the user ends the session by exiting the shell.
 
 ## Configuration
 

@@ -12,6 +12,7 @@ from lava_mcp.server import (
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
+    build_console_ready_action,
     build_console_services_action,
     build_console_ssh_command,
     build_server,
@@ -163,6 +164,22 @@ def test_build_console_ssh_command_tunnels_over_websocat() -> None:
 
 def test_ws_not_configured_message_names_the_env_var() -> None:
     assert "LAVA_MCP_GATEWAY_WS_URL" in _WS_NOT_CONFIGURED
+
+
+def test_build_console_ready_action_is_valid_and_interactive() -> None:
+    import yaml
+
+    block = build_console_ready_action(sentinel="MY_SENTINEL", timeout_minutes=70)
+    parsed = yaml.safe_load(block)
+    assert isinstance(parsed, list) and len(parsed) == 1
+    action = parsed[0]["test"]
+    assert action["timeout"]["minutes"] == 70
+    steps = action["definitions"][0]["repository"]["run"]["steps"]
+    # echoes the (matching) sentinel to unlock the proxy
+    assert any("MY_SENTINEL" in s for s in steps)
+    # holds with an interactive shell (no tick/keepalive loop)
+    assert any("exec" in s and "-i" in s for s in steps)
+    assert not any("sleep" in s for s in steps)
 
 
 def test_console_ready_in_logs_ignores_env_declaration() -> None:
