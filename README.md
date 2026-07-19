@@ -225,7 +225,7 @@ sequenceDiagram
     participant Board as Board container<br/>(reverse tunnel up, runs sshd)
 
     Human->>MCP: attach_shell(session_id)
-    Note over MCP: mint ephemeral human key; authorise it<br/>at the gateway AND in the container
+    Note over MCP: mint ephemeral human key,<br/>authorise it at the gateway AND in the container
     MCP->>Board: append human key to authorized_keys<br/>(over the session)
     MCP-->>Human: private key + ssh_config (websocat + ProxyJump)
 
@@ -239,7 +239,7 @@ sequenceDiagram
     end
 
     Human->>MCP: close_board_session(session_id)
-    Note over MCP: revoke human key; cancel job (container destroyed)
+    Note over MCP: revoke human key, cancel job (container destroyed)
 ```
 
 Human keys expire (`LAVA_MCP_GATEWAY_HUMAN_KEY_TTL`, default 1h) and are revoked on
