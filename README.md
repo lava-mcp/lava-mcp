@@ -263,14 +263,14 @@ run commands live at the console *without writing a LAVA test definition*, watch
 boot, or work with the bootloader/login prompt — whereas a board session (`attach_shell`)
 is for host-side work *next to* the board (flashing, fastboot/adb/qdl, USB debugging).
 
-**Don't hand-author the deploy+boot job** — getting boot right per device is hard. Start
-from a job that already boots this device and adapt it: `get_job_definition` of a recent
-successful job for the device, or its **health-check job** (`get_device` →
-`last_health_report_job` → `get_job_definition`). **Strongly prefer a job whose deploy
-`url` closely matches the image you want to boot** — flash method, rawprogram/patch,
-storage and auth headers are image-specific, so a job that flashed a similar URL is
-compatible while one for a different image likely is not (use `list_jobs` +
-`get_job_definition` to compare). Keep its deploy+boot actions, then add
+**Don't hand-author the deploy+boot job** — getting boot right per device is hard.
+**Always base it on a previous successful job whose deploy `url` closely matches the
+artifacts you want to boot** — flash method, rawprogram/patch, storage and auth headers
+are image-specific, so only a job that flashed a similar URL is a safe template (use
+`list_jobs` + `get_job_definition` to find and compare deploy `url`; don't use an
+unrelated job such as a health-check). Keep its deploy+boot actions — swap in your URL
+but **keep the artifact authentication** (HTTP headers such as `Authorization`, and any
+credentials) so the fetch succeeds — then add
 the console proxy on top. You don't need an example: `open_console_session` returns the
 exact `services` action, the console-ready action, and the `environment:` values to add
 (its `add_to_job` field).

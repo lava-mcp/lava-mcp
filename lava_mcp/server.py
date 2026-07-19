@@ -75,16 +75,17 @@ There are TWO different ways to get an interactive shell/console, for different 
    out. Tools: check_serial_console_support -> open_console_session -> attach_console.
 
    Writing a correct deploy+boot LAVA job from scratch is hard. Do NOT hand-author
-   the boot flow — start from a job that already deploys and boots this device and
-   adapt it: fetch a recent successful job's definition with get_job_definition, or
-   use the device's health-check job (the last_health_report_job id from
-   get_device/list_devices, via get_job_definition). STRONGLY prefer a job whose
-   deploy URL closely matches the image you want to boot — deploy+boot parameters
-   (flash method, rawprogram/patch, storage, headers) are image-specific, so a job
-   that flashed a similar URL will be compatible while one for a different image
-   likely is not. Use list_jobs to find candidates and get_job_definition to compare
-   their deploy `url`. Keep that job's deploy+boot actions (swapping in your URL) and
-   add the console proxy on top. You do NOT need to find an example anywhere:
+   the boot flow — adapt an existing job. ALWAYS base it on a previous successful job
+   whose deploy `url` closely matches the artifacts you want to boot: deploy+boot
+   parameters (flash method, rawprogram/patch, storage, auth headers) are
+   image-specific, so ONLY a job that flashed a similar URL is a safe template. Use
+   list_jobs to find candidates for this device and get_job_definition to compare
+   their deploy `url`; pick the closest URL match. Do NOT use an unrelated job (e.g. a
+   health-check, or a job for a different image) as the template — it will have
+   incompatible deploy settings. Keep the matching job's deploy+boot actions — swap in
+   your URL but KEEP its artifact authentication (HTTP headers such as Authorization,
+   and any token/credentials) so the fetch succeeds — and add the console proxy on
+   top. You do NOT need an example anywhere:
    open_console_session returns (in its `add_to_job` field) the exact `services` test
    action to paste in as the first action, plus the `environment:` values to set.
    After submitting, poll check_console_ready(job_id) until ready:true (instead of
@@ -711,16 +712,15 @@ def build_server(config: Config) -> FastMCP:
             networking. Unlike a board session, this path relies on a LAVA job that
             DEPLOYS and BOOTS an image; this call only reserves the console bridge.
 
-            You supply the deploy+boot job. Do NOT hand-author the boot flow — it is
-            hard to get right per device. Start from a job that already boots this
-            device and adapt it: get_job_definition of a recent successful job for the
-            device, or the device's health-check job (its last_health_report_job id
-            from get_device/list_devices). STRONGLY prefer a job whose deploy URL
-            closely matches the image you want to boot — deploy+boot params (flash
-            method, rawprogram/patch, storage, auth headers) are image-specific, so a
-            job that flashed a similar URL is compatible while one for a different
-            image likely is not (use list_jobs + get_job_definition to compare deploy
-            `url`). Keep that job's deploy+boot actions (swap in your URL) and add the
+            You supply the deploy+boot job. Do NOT hand-author the boot flow — adapt an
+            existing job. ALWAYS base it on a previous successful job whose deploy `url`
+            closely matches the artifacts you want to boot: deploy+boot params (flash
+            method, rawprogram/patch, storage, auth headers) are image-specific, so only
+            a job that flashed a similar URL is a safe template (use list_jobs +
+            get_job_definition to find and compare deploy `url`). Do NOT use an
+            unrelated job such as a health-check. Keep that job's deploy+boot actions —
+            swap in your URL but KEEP its artifact authentication (HTTP headers such as
+            Authorization, and any credentials) so the fetch succeeds — and add the
             console proxy on top.
 
             You do NOT need to find an example in any repo: this call returns, in

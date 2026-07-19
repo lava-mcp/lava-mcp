@@ -220,9 +220,10 @@ def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
     # both ways, and the on-board vs next-to-board distinction
     assert "open_board_session" in ins and "open_console_session" in ins
     assert "next to" in ins and "serial console" in ins.lower()
-    # console way uses LAVA to deploy+boot, seeded from an existing/health-check job
-    assert "get_job_definition" in ins and "health-check" in ins
-    # seed the boot from a job whose deploy URL matches the target image
-    assert "deploy URL" in ins
+    # console deploy/boot must be seeded from a previous job whose deploy url matches
+    # the target artifacts, keeping its auth headers
+    assert "get_job_definition" in ins
+    assert "deploy `url`" in ins
+    assert "Authorization" in ins
     # board-session container is Debian; includes a build-a-tool example
     assert "Debian" in ins and "linux-msm/qdl" in ins
