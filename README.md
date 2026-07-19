@@ -335,7 +335,6 @@ loops — so no keepalive is needed); the user ends the session by exiting the s
 | `LAVA_MCP_HTTP_ALLOW_USERS` | `--http-allow-user` | LAVA users allowed the interactive 'use' tools (empty = all) |
 | `LAVA_MCP_SSH_ALLOW_USERS` | `--ssh-allow-user` | LAVA users allowed the 'attach' (SSH/console) tools (empty = all) |
 | `LAVA_MCP_REMOTE_ACCESS_TAG` | `--remote-access-tag` | Device tag required to host remote-access sessions (empty = no gate) |
-| `LAVA_MCP_TEMPLATE_JOB_MASTERS` | — | Comma/space-separated LAVA master URLs to search for a boot-template job (deploy-url match); surfaced in the agent instructions |
 | `LAVA_MCP_GATEWAY_HUMAN_KEY_TTL` | — | Lifetime (seconds) of an ephemeral human access key from `attach_*` (default 3600) |
 
 ## Tools (v1)

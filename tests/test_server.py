@@ -231,19 +231,6 @@ def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
     assert "Debian" in ins and "linux-msm/qdl" in ins
 
 
-def test_template_job_masters_surface_in_instructions() -> None:
-    ins = (
-        build_server(
-            Config(url="https://x", template_job_masters=("https://lava.example.com",))
-        ).instructions
-        or ""
-    )
-    assert "Boot-template masters" in ins and "lava.example.com" in ins
-    # absent when not configured
-    ins2 = build_server(Config(url="https://x")).instructions or ""
-    assert "Boot-template masters" not in ins2
-
-
 def test_deploy_urls_from_definition_extracts_deploy_artifacts() -> None:
     defn = """
 device_type: qcs615-ride
@@ -286,14 +273,3 @@ def test_find_boot_template_registered() -> None:
     server = build_server(Config(url="https://x"))
     names = {t.name for t in _asyncio.run(server.list_tools())}
     assert "find_boot_template" in names
-
-
-def test_config_reads_template_job_masters(monkeypatch) -> None:
-    monkeypatch.setenv(
-        "LAVA_MCP_TEMPLATE_JOB_MASTERS", "https://lava.infra.foundries.io https://other"
-    )
-    cfg = Config.from_env()
-    assert cfg.template_job_masters == (
-        "https://lava.infra.foundries.io",
-        "https://other",
-    )

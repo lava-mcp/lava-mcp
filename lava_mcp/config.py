@@ -77,12 +77,6 @@ class Config:
     # LAVA device tag a device must carry to host interactive/remote-access jobs.
     # open_board_session requires it and pins the job to it. Empty disables the gate.
     remote_access_tag: str = "allow-remote-access"
-    # Additional LAVA master base URLs to search for a boot-template job (a previous
-    # successful job whose deploy url matches the artifacts to boot). Surfaced in the
-    # server instructions so an agent knows where the good templates live (e.g. the
-    # production master) rather than only this instance. Advisory hint, not queried by
-    # the server itself.
-    template_job_masters: tuple[str, ...] = ()
     # how long an ephemeral human access key (from attach_*) stays valid, in seconds
     gateway_human_key_ttl: float = 3600.0
     # interactive session assets (container image + test definition location).
@@ -119,7 +113,6 @@ class Config:
             remote_access_tag=os.environ.get(
                 "LAVA_MCP_REMOTE_ACCESS_TAG", "allow-remote-access"
             ),
-            template_job_masters=_env_list("LAVA_MCP_TEMPLATE_JOB_MASTERS"),
             gateway_human_key_ttl=float(
                 os.environ.get("LAVA_MCP_GATEWAY_HUMAN_KEY_TTL", "3600")
             ),
