@@ -24,16 +24,14 @@ services:
     image: ghcr.io/mattface/lava-mcp/ser2net-proxy:latest
     pull_policy: always
     networks: [lab]
-    environment:
-      SER2NET_HOST: ${SER2NET_HOST:-ser2net}
-      SER2NET_PORT: ${SER2NET_PORT:-7095}
-      CONSOLE_LISTEN_PORT: ${CONSOLE_LISTEN_PORT:-2323}
-      CONSOLE_READY_SENTINEL: ${CONSOLE_READY_SENTINEL:-LAVA_MCP_CONSOLE_WRITABLE}
-      GATEWAY_HOST: ${GATEWAY_HOST:-}
-      GATEWAY_WS_URL: ${GATEWAY_WS_URL:-}
-      SESSION_ID: ${SESSION_ID:-}
-      REVERSE_PORT: ${REVERSE_PORT:-}
-      SESSION_PRIVATE_KEY_B64: ${SESSION_PRIVATE_KEY_B64:-}
+    # LAVA writes the job+device `environment:` to a .env at the *repo root* — but
+    # docker compose only auto-reads a .env from the compose file's own directory, so
+    # `${VAR}` interpolation here silently got nothing. Load LAVA's .env explicitly
+    # (path is relative to this compose file: two levels up to the repo root); this
+    # injects GATEWAY_*/SESSION_*/SER2NET_*/CONSOLE_* straight into the container.
+    # Missing values fall back to console-proxy.py / console-connect.sh defaults.
+    env_file:
+      - ../../.env
 
 networks:
   lab:
