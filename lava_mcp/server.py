@@ -12,7 +12,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from dataclasses import replace
 from typing import Any
+from urllib.parse import urlparse
+
+import yaml
 
 logger = logging.getLogger("lava_mcp")
 
@@ -78,10 +82,11 @@ There are TWO different ways to get an interactive shell/console, for different 
    the boot flow — adapt an existing job. ALWAYS base it on a previous successful job
    whose deploy `url` closely matches the artifacts you want to boot: deploy+boot
    parameters (flash method, rawprogram/patch, storage, auth headers) are
-   image-specific, so ONLY a job that flashed a similar URL is a safe template. Use
-   list_jobs to find candidates for this device and get_job_definition to compare
-   their deploy `url`; pick the closest URL match. Do NOT use an unrelated job (e.g. a
-   health-check, or a job for a different image) as the template — it will have
+   image-specific, so ONLY a job that flashed a similar URL is a safe template. Call
+   find_boot_template(artifact_url, device_type) — it searches this instance and the
+   template masters and returns the best URL-matched jobs with their full definition
+   (or do it by hand with list_jobs + get_job_definition). Do NOT use an unrelated job
+   (e.g. a health-check, or a job for a different image) as the template — it will have
    incompatible deploy settings. Keep the matching job's deploy+boot actions — swap in
    your URL but KEEP its artifact authentication (HTTP headers such as Authorization,
    and any token/credentials) so the fetch succeeds — and add the console proxy on
@@ -217,6 +222,50 @@ def build_console_ready_action(
         f"          - 'echo \"{sentinel}\"'\n"
         "          - 'exec \"$(command -v bash || command -v sh)\" -i'\n"
     )
+
+
+def _collect_urls(node: Any, out: list[str]) -> None:
+    if isinstance(node, str):
+        if node.startswith("http://") or node.startswith("https://"):
+            out.append(node)
+    elif isinstance(node, dict):
+        for v in node.values():
+            _collect_urls(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_urls(v, out)
+
+
+def deploy_urls_from_definition(definition_text: str) -> list[str]:
+    """Every http(s) artifact URL under the deploy actions of a job definition."""
+    try:
+        job = yaml.safe_load(definition_text)
+    except yaml.YAMLError:
+        return []
+    if not isinstance(job, dict):
+        return []
+    urls: list[str] = []
+    for action in job.get("actions", []) or []:
+        if isinstance(action, dict) and "deploy" in action:
+            _collect_urls(action["deploy"], urls)
+    return urls
+
+
+def url_match_score(target: str, candidate: str) -> int:
+    """Similarity of two artifact URLs: same filename dominates, then shared path
+    segments, then same host. Build-number path segments differ between builds, so a
+    good template scores high on the (build-independent) filename and device segments.
+    """
+    t, c = urlparse(target), urlparse(candidate)
+    tseg = [s for s in t.path.split("/") if s]
+    cseg = [s for s in c.path.split("/") if s]
+    score = 0
+    if t.netloc and t.netloc == c.netloc:
+        score += 2
+    if tseg and cseg and tseg[-1] == cseg[-1]:  # same artifact filename
+        score += 5
+    score += len(set(tseg) & set(cseg))  # shared path segments (device, image family)
+    return score
 
 
 def console_ready_in_logs(logs_text: str, sentinel: str) -> bool:
@@ -477,6 +526,99 @@ def build_server(config: Config) -> FastMCP:
         return client().get_job_definition(job_id)
 
     @mcp.tool()
+    def find_boot_template(
+        artifact_url: str,
+        device_type: str | None = None,
+        per_master: int = 20,
+        top: int = 3,
+    ) -> Any:
+        """Find the best previous job to use as a deploy+boot template for an image.
+
+        Searches THIS instance (with your token) and the configured template masters
+        (LAVA_MCP_TEMPLATE_JOB_MASTERS, public jobs only — no auth) for recent
+        successful (Complete) jobs, extracts each job's deploy URL(s), and ranks them
+        by similarity to ``artifact_url`` (same artifact filename dominates, then
+        shared path segments, then same host). Returns the top matches with their full
+        job ``definition`` so you can adapt it directly: swap in your artifact_url,
+        KEEP that job's artifact authentication (Authorization headers/credentials),
+        and add the console proxy. Pass ``device_type`` to narrow the search. Only
+        ``per_master`` recent jobs per master are scanned (reported in ``searched``).
+        """
+        searches: list[tuple[LavaClient, str, str]] = [(client(), config.url, "token")]
+        seen = {config.url.rstrip("/")} if config.url else set()
+        for master in config.template_job_masters:
+            if master.rstrip("/") in seen:
+                continue
+            seen.add(master.rstrip("/"))
+            searches.append(
+                (LavaClient(replace(config, url=master, token=None)), master, "public")
+            )
+
+        scored: list[dict[str, Any]] = []
+        searched: list[dict[str, Any]] = []
+        for cl, master, auth in searches:
+            scanned = 0
+            try:
+                filters: dict[str, Any] = {"health": "Complete", "ordering": "-id"}
+                if device_type:
+                    filters["device_type"] = device_type
+                page = cl.list_jobs(limit=per_master, **filters)
+                for row in page.get("results", []) or []:
+                    jid = row.get("id")
+                    if jid is None:
+                        continue
+                    try:
+                        job = cl.get_job(jid)
+                    except Exception:  # noqa: BLE001 - skip an unreadable job
+                        continue
+                    scanned += 1
+                    defn = job.get("original_definition") or job.get("definition") or ""
+                    urls = deploy_urls_from_definition(defn)
+                    if not urls:
+                        continue
+                    best_url = max(urls, key=lambda u: url_match_score(artifact_url, u))
+                    best = url_match_score(artifact_url, best_url)
+                    if best <= 0:
+                        continue
+                    scored.append(
+                        {
+                            "master": master,
+                            "auth": auth,
+                            "job_id": jid,
+                            "device_type": job.get("requested_device_type"),
+                            "deploy_url": best_url,
+                            "score": best,
+                            "definition": defn,
+                        }
+                    )
+                searched.append(
+                    {"master": master, "auth": auth, "jobs_scanned": scanned}
+                )
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - one master failing must not kill all
+                searched.append(
+                    {
+                        "master": master,
+                        "auth": auth,
+                        "jobs_scanned": scanned,
+                        "error": str(exc),
+                    }
+                )
+        scored.sort(key=lambda m: m["score"], reverse=True)
+        return {
+            "artifact_url": artifact_url,
+            "searched": searched,
+            "matches": scored[:top],
+            "note": (
+                "Use the top match's `definition` as your deploy+boot base: swap in "
+                "artifact_url, KEEP its Authorization/artifact auth, then add the "
+                "console proxy (see open_console_session). If matches is empty or "
+                "scores are low, widen per_master or drop device_type."
+            ),
+        }
+
+    @mcp.tool()
     def get_job_logs(
         job_id: int, start: int | None = None, end: int | None = None
     ) -> str:
@@ -730,9 +872,10 @@ def build_server(config: Config) -> FastMCP:
             existing job. ALWAYS base it on a previous successful job whose deploy `url`
             closely matches the artifacts you want to boot: deploy+boot params (flash
             method, rawprogram/patch, storage, auth headers) are image-specific, so only
-            a job that flashed a similar URL is a safe template (use list_jobs +
-            get_job_definition to find and compare deploy `url`). Do NOT use an
-            unrelated job such as a health-check. Keep that job's deploy+boot actions —
+            a job that flashed a similar URL is a safe template. Call
+            find_boot_template(artifact_url, device_type) to search this instance and
+            the template masters for the best URL match. Do NOT use an unrelated job
+            such as a health-check. Keep that job's deploy+boot actions —
             swap in your URL but KEEP its artifact authentication (HTTP headers such as
             Authorization, and any credentials) so the fetch succeeds — and add the
             console proxy on top.

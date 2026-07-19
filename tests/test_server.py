@@ -18,6 +18,8 @@ from lava_mcp.server import (
     build_server,
     build_shell_ssh_config,
     console_ready_in_logs,
+    deploy_urls_from_definition,
+    url_match_score,
 )
 
 
@@ -240,6 +242,50 @@ def test_template_job_masters_surface_in_instructions() -> None:
     # absent when not configured
     ins2 = build_server(Config(url="https://x")).instructions or ""
     assert "Boot-template masters" not in ins2
+
+
+def test_deploy_urls_from_definition_extracts_deploy_artifacts() -> None:
+    defn = """
+device_type: qcs615-ride
+actions:
+- test:
+    services: [{name: x}]
+- deploy:
+    to: qdl
+    socflash:
+      headers: {Authorization: SECRET}
+      url: https://host/a/b/qcs615-ride/core-image-base.rootfs.tar.gz
+- boot:
+    method: qdl
+"""
+    urls = deploy_urls_from_definition(defn)
+    assert urls == ["https://host/a/b/qcs615-ride/core-image-base.rootfs.tar.gz"]
+    # the Authorization header value is not a URL and must not be collected
+    assert all(u.startswith("http") for u in urls)
+    assert deploy_urls_from_definition("not: [valid") == []
+
+
+def test_url_match_score_prefers_same_filename_and_path() -> None:
+    target = (
+        "https://h/x/meta-soc/28624135807-1/nodistro/qcs615-ride/img.rootfs.tar.gz"
+    )
+    same_img_new_build = (
+        "https://h/x/meta-soc/99999999999-2/nodistro/qcs615-ride/img.rootfs.tar.gz"
+    )
+    other_device = "https://h/x/meta-soc/28624135807-1/nodistro/sa8775p/other.img.gz"
+    unrelated = "https://elsewhere/y/z/thing.bin"
+    s_same = url_match_score(target, same_img_new_build)
+    s_other = url_match_score(target, other_device)
+    # same filename + device + host across a different build scores highest
+    assert s_same > s_other > url_match_score(target, unrelated)
+
+
+def test_find_boot_template_registered() -> None:
+    import asyncio as _asyncio
+
+    server = build_server(Config(url="https://x"))
+    names = {t.name for t in _asyncio.run(server.list_tools())}
+    assert "find_boot_template" in names
 
 
 def test_config_reads_template_job_masters(monkeypatch) -> None:
