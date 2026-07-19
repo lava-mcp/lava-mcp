@@ -266,7 +266,11 @@ is for host-side work *next to* the board (flashing, fastboot/adb/qdl, USB debug
 **Don't hand-author the deploy+boot job** — getting boot right per device is hard. Start
 from a job that already boots this device and adapt it: `get_job_definition` of a recent
 successful job for the device, or its **health-check job** (`get_device` →
-`last_health_report_job` → `get_job_definition`). Keep its deploy+boot actions, then add
+`last_health_report_job` → `get_job_definition`). **Strongly prefer a job whose deploy
+`url` closely matches the image you want to boot** — flash method, rawprogram/patch,
+storage and auth headers are image-specific, so a job that flashed a similar URL is
+compatible while one for a different image likely is not (use `list_jobs` +
+`get_job_definition` to compare). Keep its deploy+boot actions, then add
 the console proxy on top. You don't need an example: `open_console_session` returns the
 exact `services` action, the console-ready action, and the `environment:` values to add
 (its `add_to_job` field).

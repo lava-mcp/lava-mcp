@@ -78,7 +78,12 @@ There are TWO different ways to get an interactive shell/console, for different 
    the boot flow — start from a job that already deploys and boots this device and
    adapt it: fetch a recent successful job's definition with get_job_definition, or
    use the device's health-check job (the last_health_report_job id from
-   get_device/list_devices, via get_job_definition). Keep its deploy+boot actions and
+   get_device/list_devices, via get_job_definition). STRONGLY prefer a job whose
+   deploy URL closely matches the image you want to boot — deploy+boot parameters
+   (flash method, rawprogram/patch, storage, headers) are image-specific, so a job
+   that flashed a similar URL will be compatible while one for a different image
+   likely is not. Use list_jobs to find candidates and get_job_definition to compare
+   their deploy `url`. Keep that job's deploy+boot actions (swapping in your URL) and
    add the console proxy on top. You do NOT need to find an example anywhere:
    open_console_session returns (in its `add_to_job` field) the exact `services` test
    action to paste in as the first action, plus the `environment:` values to set.
@@ -710,8 +715,13 @@ def build_server(config: Config) -> FastMCP:
             hard to get right per device. Start from a job that already boots this
             device and adapt it: get_job_definition of a recent successful job for the
             device, or the device's health-check job (its last_health_report_job id
-            from get_device/list_devices). Keep that job's deploy+boot actions and add
-            the console proxy on top.
+            from get_device/list_devices). STRONGLY prefer a job whose deploy URL
+            closely matches the image you want to boot — deploy+boot params (flash
+            method, rawprogram/patch, storage, auth headers) are image-specific, so a
+            job that flashed a similar URL is compatible while one for a different
+            image likely is not (use list_jobs + get_job_definition to compare deploy
+            `url`). Keep that job's deploy+boot actions (swap in your URL) and add the
+            console proxy on top.
 
             You do NOT need to find an example in any repo: this call returns, in
             ``add_to_job``, the exact ``services`` test action to paste in and the full
