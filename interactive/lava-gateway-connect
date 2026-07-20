@@ -25,10 +25,20 @@ printf '%s\n' "$SESSION_PUBLIC_KEY" >> /root/.ssh/authorized_keys
 printf '%s\n' "$SESSION_PRIVATE_KEY" > /root/.ssh/session_key
 chmod 600 /root/.ssh/authorized_keys /root/.ssh/session_key
 
+# Expose LAVA's environment to gateway ssh sessions. sshd builds a clean env for each
+# session, so without this the LAVA_* vars (board_id/ANDROID_SERIAL, device hostname/
+# type, connection/power commands) that LAVA put in our shell would be invisible to
+# run_in_session / attach_shell. Persist them to ~/.ssh/environment, loaded when sshd
+# runs with PermitUserEnvironment=yes. NOTE: the power/serial commands (tac-api.py /
+# telnet ser2net) target dispatcher-host tools not present/reachable in this
+# container — they are informational here.
+env | grep -E '^(LAVA_|ANDROID_)' > /root/.ssh/environment 2>/dev/null || true
+chmod 600 /root/.ssh/environment 2>/dev/null || true
+
 # Start this container's sshd (key auth for root is permitted by default).
 ssh-keygen -A >/dev/null
 mkdir -p /run/sshd
-/usr/sbin/sshd
+/usr/sbin/sshd -o PermitUserEnvironment=yes
 
 echo "lava-mcp: dialing gateway as ${SESSION_ID}" \
      "(reverse ${REVERSE_PORT} -> localhost:22)"

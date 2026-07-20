@@ -118,7 +118,14 @@ def test_interactive_assets_match_contract() -> None:
     exported = set(export_step.removeprefix("export ").split())
     assert set(testdef["params"]) <= exported
     # the script the test definition runs exists in the image build context
-    assert (root / "interactive" / "lava-gateway-connect").exists()
+    connect = root / "interactive" / "lava-gateway-connect"
+    assert connect.exists()
+    # it exposes LAVA's environment to gateway ssh sessions: persist LAVA_* to
+    # ~/.ssh/environment and start sshd with PermitUserEnvironment so run_in_session
+    # / attach_shell inherit board_id/ANDROID_SERIAL/device info etc.
+    script = connect.read_text()
+    assert "/root/.ssh/environment" in script
+    assert "PermitUserEnvironment=yes" in script
     # the default test-definition path points at the file we ship
     assert Config(url="https://x").interactive_path == "interactive/ssh-gateway.yaml"
 
