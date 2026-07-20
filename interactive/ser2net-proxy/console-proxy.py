@@ -14,6 +14,8 @@ environment into the compose .env):
   SER2NET_HOST / SER2NET_PORT   console endpoint (default ser2net:7095)
   CONSOLE_LISTEN_PORT           port watchers connect to (default 2323)
   CONSOLE_READY_SENTINEL        string that unlocks writes (must match the job's echo)
+  CONSOLE_INPUT_CHAR_DELAY      per-character gap (s) when writing user input to the
+                                board, so a slow UART doesn't drop chars (default 0.05)
 """
 from __future__ import annotations
 
@@ -25,6 +27,11 @@ SER2NET_HOST = os.environ.get("SER2NET_HOST", "ser2net")
 SER2NET_PORT = int(os.environ.get("SER2NET_PORT", "7095"))
 LISTEN_PORT = int(os.environ.get("CONSOLE_LISTEN_PORT", "2323"))
 SENTINEL = os.environ.get("CONSOLE_READY_SENTINEL", "LAVA_MCP_CONSOLE_WRITABLE").encode()
+# Pace user input to the board one byte at a time with this gap (seconds). A slow
+# UART/getty drops characters if fed too fast (e.g. a pasted command), so trickle
+# them. 0 disables pacing. Applies only to watcher->board writes, not the console
+# output relayed back.
+INPUT_CHAR_DELAY = float(os.environ.get("CONSOLE_INPUT_CHAR_DELAY", "0.05"))
 
 console: dict = {"writer": None, "writable": False}
 watchers: set[asyncio.StreamWriter] = set()
@@ -84,8 +91,12 @@ async def handle_watcher(reader: asyncio.StreamReader, writer: asyncio.StreamWri
                 break
             cw = console["writer"]
             if console["writable"] and cw is not None:
-                cw.write(data)
-                await cw.drain()
+                # trickle input to the board so a slow UART/getty doesn't drop chars
+                for i in range(len(data)):
+                    cw.write(data[i : i + 1])
+                    await cw.drain()
+                    if INPUT_CHAR_DELAY:
+                        await asyncio.sleep(INPUT_CHAR_DELAY)
             # else: silently drop input while read-only
     except Exception:
         pass
