@@ -25,14 +25,23 @@ printf '%s\n' "$SESSION_PUBLIC_KEY" >> /root/.ssh/authorized_keys
 printf '%s\n' "$SESSION_PRIVATE_KEY" > /root/.ssh/session_key
 chmod 600 /root/.ssh/authorized_keys /root/.ssh/session_key
 
-# Expose LAVA's environment to gateway ssh sessions. sshd builds a clean env for each
-# session, so without this the LAVA_* vars (board_id/ANDROID_SERIAL, device hostname/
-# type, connection/power commands) that LAVA put in our shell would be invisible to
-# run_in_session / attach_shell. Persist them to ~/.ssh/environment, loaded when sshd
-# runs with PermitUserEnvironment=yes. NOTE: the power/serial commands (tac-api.py /
-# telnet ser2net) target dispatcher-host tools not present/reachable in this
-# container — they are informational here.
-env | grep -E '^(LAVA_|ANDROID_)' > /root/.ssh/environment 2>/dev/null || true
+# Expose LAVA's injected environment to gateway ssh sessions. sshd builds a clean env
+# per session, so without this the vars LAVA wrote to /lava-<id>/environment (device
+# info, board_id/ANDROID_SERIAL, HTTP_CACHE, connection/power commands, ...) — sourced
+# into our shell — would be invisible to run_in_session / attach_shell. Re-emit every
+# variable that file defines as NAME=value into ~/.ssh/environment (loaded when sshd
+# runs with PermitUserEnvironment=yes); values come from our already-sourced env so
+# the shell has handled the quoting. NOTE: the power/serial commands (tac-api.py /
+# telnet ser2net) target dispatcher tools not present/reachable here — informational.
+for envfile in /lava-*/environment; do
+  [ -f "$envfile" ] || continue
+  for n in $(sed -n 's/^export \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$envfile"); do
+    eval "v=\${$n-}"
+    # ~/.ssh/environment is one NAME=value per line; skip any multi-line value
+    [ "$v" = "$(printf '%s' "$v" | tr -d '\n')" ] || continue
+    printf '%s=%s\n' "$n" "$v"
+  done
+done > /root/.ssh/environment
 chmod 600 /root/.ssh/environment 2>/dev/null || true
 
 # Start this container's sshd (key auth for root is permitted by default).
