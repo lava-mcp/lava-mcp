@@ -229,6 +229,8 @@ def test_server_instructions_describe_both_ways_to_reach_a_board() -> None:
     assert "Authorization" in ins
     # board-session container is Debian; includes a build-a-tool example
     assert "Debian" in ins and "linux-msm/qdl" in ins
+    # board-session power/recovery is via device commands on the worker
+    assert "run_device_command" in ins and "power_on" in ins
 
 
 def test_deploy_urls_from_definition_extracts_deploy_artifacts() -> None:
