@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
+        python3 \
         tar \
         iproute2 \
     && rm -rf /var/lib/apt/lists/*
@@ -46,5 +47,15 @@ RUN set -eux; \
     chmod +x /usr/local/bin/websocat; \
     websocat --version
 
-COPY lava-gateway-connect /usr/local/bin/lava-gateway-connect
-RUN chmod +x /usr/local/bin/lava-gateway-connect
+# Session foreground supervisor + the device-command/signal relay clients. The
+# supervisor manages the reverse tunnel and lets agent ssh sessions run LAVA device
+# commands (power_on/off, hard_reset, ...) and emit signals via the dispatcher.
+COPY lava-gateway-connect lava-session-supervisor lava-device-command lava-signal \
+     lava-power-on lava-power-off lava-hard-reset /usr/local/bin/
+RUN chmod +x /usr/local/bin/lava-gateway-connect \
+        /usr/local/bin/lava-session-supervisor \
+        /usr/local/bin/lava-device-command \
+        /usr/local/bin/lava-signal \
+        /usr/local/bin/lava-power-on \
+        /usr/local/bin/lava-power-off \
+        /usr/local/bin/lava-hard-reset

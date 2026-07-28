@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Emit a fire-and-forget <LAVA_SIGNAL_*> marker from a lava-mcp board session.
+
+Relays the marker through the session supervisor so it reaches the dispatcher-watched
+test-shell pty (an ssh session's own pty is not watched). Use it to make a session a
+first-class LAVA test citizen — e.g. record a result:
+
+  lava-signal 'TESTCASE TEST_CASE_ID=my_check RESULT=pass'
+
+The argument is the marker body (everything between <LAVA_SIGNAL_ and >); it must not
+contain '>' or a newline. For device commands that need the exit status, use
+lava-device-command instead.
+"""
+import os
+import socket
+import sys
+
+SOCK = os.environ.get("LAVA_RELAY_SOCK", "/run/lava-relay.sock")
+
+
+def main() -> int:
+    body = " ".join(sys.argv[1:]).strip()
+    if not body:
+        sys.stderr.write("usage: lava-signal <signal-body>\n")
+        return 2
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(30)
+        s.connect(SOCK)
+        s.sendall(f"signal {body}\n".encode())
+        resp = s.makefile("rb").readline().decode(errors="replace").strip()
+    except OSError as exc:
+        sys.stderr.write(f"lava-signal: relay unavailable ({exc})\n")
+        return 1
+    if resp == "ok":
+        return 0
+    sys.stderr.write(f"lava-signal: {resp or 'no response'}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

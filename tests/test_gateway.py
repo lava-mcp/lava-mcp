@@ -79,6 +79,8 @@ def test_build_interactive_job_carries_session_params() -> None:
     assert job["tags"] == ["wifi", "allow-remote-access"]
     test_action = job["actions"][0]["test"]
     assert test_action["docker"]["image"] == cfg.interactive_image
+    # session may run the device's LAVA commands (power_on/off/hard_reset/...) via relay
+    assert test_action["device_commands"] is True
     definition = test_action["definitions"][0]
     assert definition["repository"] == cfg.interactive_repo
     assert definition["path"] == cfg.interactive_path
@@ -126,8 +128,19 @@ def test_interactive_assets_match_contract() -> None:
     script = connect.read_text()
     assert "/root/.ssh/environment" in script
     assert "PermitUserEnvironment=yes" in script
+    # it hands off to the session supervisor (device-command / signal relay), which
+    # ships alongside the device-command client
+    assert "lava-session-supervisor" in script
+    idir = root / "interactive"
+    for name in ("lava-session-supervisor", "lava-device-command", "lava-power-on"):
+        assert (idir / name).exists(), name
     # the default test-definition path points at the file we ship
     assert Config(url="https://x").interactive_path == "interactive/ssh-gateway.yaml"
+
+
+def test_run_device_command_tool_registered() -> None:
+    names = _tool_names(Config(url="https://x", gateway_enabled=True))
+    assert "run_device_command" in names
 
 
 def _tool_names(cfg: Config) -> set[str]:

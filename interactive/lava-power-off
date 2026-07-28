@@ -1,0 +1,3 @@
+#!/bin/sh
+# convenience wrapper: power_off the DUT via the session relay
+exec lava-device-command power_off

@@ -706,6 +706,42 @@ def build_server(config: Config) -> FastMCP:
             return await gateway.run(session_id, command, timeout=timeout)
 
         @mcp.tool()
+        async def run_device_command(session_id: str, name: str) -> Any:
+            """Run a LAVA device command on the worker for a board session.
+
+            Lets you drive the DUT's power/recovery from outside the board — e.g.
+            power-cycle it into EDL for flashing — without shelling in. ``name`` is a
+            device command: power_on, power_off, hard_reset, recovery_mode,
+            recovery_exit, pre_power_command, pre_os_command, or one of the device's
+            user_commands (e.g. USB-port toggles). Runs `lava-device-command` in the
+            container, which relays the request to the dispatcher (the session's job is
+            submitted with device_commands enabled). Returns the command's exit status
+            (ok = ran successfully). Requires a LAVA instance with DEVICECMD support.
+            """
+            user = require_user(config.http_allow_users)
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"error": f"unknown session {session_id}"}
+            _require_owner(session, user)
+            if session.kind != "container":
+                return {"error": f"session {session_id} is not a container session"}
+            if not name or any(c.isspace() for c in name) or ">" in name:
+                return {"error": "invalid device command name (no whitespace or '>')"}
+            await asyncio.to_thread(gateway.ensure_started)
+            # give the relay's own ack wait (~90s) room to return before gateway.run
+            res = await gateway.run(
+                session_id, f"lava-device-command {name}", timeout=150
+            )
+            rc = res.get("exit_status")
+            return {
+                "name": name,
+                "exit_status": rc,
+                "ok": rc == 0,
+                "stdout": res.get("stdout"),
+                "stderr": res.get("stderr"),
+            }
+
+        @mcp.tool()
         async def close_board_session(session_id: str) -> Any:
             """Close a board session and cancel its LAVA job (releases the board)."""
             user = require_user(config.http_allow_users)
