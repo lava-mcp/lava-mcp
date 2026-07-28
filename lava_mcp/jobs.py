@@ -63,6 +63,10 @@ def build_interactive_job(
                 "test": {
                     "timeout": {"minutes": timeout_minutes},
                     "docker": {"image": image or config.interactive_image},
+                    # permit the session to run the device's LAVA commands (power_on/
+                    # off, hard_reset, recovery_*, user_commands) on the worker via the
+                    # DEVICECMD relay — e.g. power-cycling the DUT for flashing/EDL.
+                    "device_commands": True,
                     "definitions": [
                         {
                             "repository": config.interactive_repo,

@@ -31,8 +31,10 @@ chmod 600 /root/.ssh/authorized_keys /root/.ssh/session_key
 # into our shell — would be invisible to run_in_session / attach_shell. Re-emit every
 # variable that file defines as NAME=value into ~/.ssh/environment (loaded when sshd
 # runs with PermitUserEnvironment=yes); values come from our already-sourced env so
-# the shell has handled the quoting. NOTE: the power/serial commands (tac-api.py /
-# telnet ser2net) target dispatcher tools not present/reachable here — informational.
+# the shell has handled the quoting. NOTE: the LAVA_*_COMMAND values themselves target
+# dispatcher-host tools and can't be run directly here — to actually power-cycle etc.,
+# a session uses lava-device-command / lava-power-* (see the supervisor below), which
+# ask the dispatcher to run the device command on the worker.
 for envfile in /lava-*/environment; do
   [ -f "$envfile" ] || continue
   for n in $(sed -n 's/^export \([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$envfile"); do
@@ -52,16 +54,15 @@ mkdir -p /run/sshd
 echo "lava-mcp: dialing gateway as ${SESSION_ID}" \
      "(reverse ${REVERSE_PORT} -> localhost:22)"
 
-# Keep the tunnel up for the life of the job. AUTOSSH_GATETIME=0 stops autossh from
-# giving up when ssh exits quickly (e.g. gateway not ready yet / ExitOnForwardFailure),
-# so it keeps reconnecting. A bounded outer loop retries a few times if autossh itself
-# exits, then fails the job cleanly rather than hanging until the job timeout.
-export AUTOSSH_GATETIME=0
-attempt=0
-max_attempts="${GATEWAY_CONNECT_ATTEMPTS:-10}"
-while [ "$attempt" -lt "$max_attempts" ]; do
-    attempt=$((attempt + 1))
-    echo "lava-mcp: gateway connect attempt ${attempt}/${max_attempts}"
+# Hand off to the session supervisor as the test-shell foreground (exec, so it keeps
+# our stdin/stdout — the dispatcher-watched pty). It manages the autossh reverse
+# tunnel (the argv after --, with the same bounded retry as before) AND serves a relay
+# so agent ssh sessions can issue LAVA device commands (power_on/off, hard_reset, ...)
+# and signals, which only work from this foreground pty. It exits with the tunnel's
+# status, so the LAVA test action still ends when the session does. autossh keeps
+# reconnecting (AUTOSSH_GATETIME=0) within each attempt.
+exec python3 /usr/local/bin/lava-session-supervisor \
+    --attempts "${GATEWAY_CONNECT_ATTEMPTS:-10}" --retry-delay 5 -- \
     autossh -M 0 -N \
         -o StrictHostKeyChecking=no \
         -o UserKnownHostsFile=/dev/null \
@@ -73,8 +74,3 @@ while [ "$attempt" -lt "$max_attempts" ]; do
         -R "127.0.0.1:${REVERSE_PORT}:localhost:22" \
         "$@" \
         "${SESSION_ID}@${GATEWAY_HOST}"
-    echo "lava-mcp: gateway connection exited (attempt ${attempt}), retrying in 5s"
-    sleep 5
-done
-echo "lava-mcp: giving up after ${max_attempts} gateway connect attempts" >&2
-exit 1

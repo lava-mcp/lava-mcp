@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Foreground supervisor for a lava-mcp interactive board session.
+
+LAVA's DEVICECMD test-shell signal (and every <LAVA_SIGNAL_*> marker) only works
+from the *foreground* of the docker test shell: the pty that LAVA's dispatcher
+pexpect-monitors. But an agent's shells arrive over sshd on their own ptys, so a
+session that runs `lava-device-command hard_reset` prints the marker to its own
+terminal and the dispatcher never sees it.
+
+This process runs as that foreground command (exec'd by lava-gateway-connect, so it
+inherits PID 1's stdin/stdout). It:
+
+  * manages the autossh reverse tunnel (the argv after `--`), with a bounded retry
+    loop, and exits with its status so the LAVA test action still ends with the
+    session;
+  * serves a unix-socket relay (LAVA_RELAY_SOCK) that in-container clients use to
+    reach the test shell channel:
+      - request/ack  `cmd <name>`   -> emits <LAVA_SIGNAL_DEVICECMD name>, waits for
+                                       the dispatcher's <LAVA_DEVICECMD_ACK name rc>,
+                                       replies `rc <n>` (serialised: one in flight);
+      - fire-and-forget `signal <body>` -> emits <LAVA_SIGNAL_body>, replies `ok`
+                                       (so a session's TESTCASE/TESTSET/... land in
+                                       the job);
+  * serialises every write to the pty so concurrent sessions cannot interleave a
+    marker.
+
+autossh's own output is sent to a log file, not the pty, so it can never corrupt a
+marker. stdlib only (matches the console proxy's dependency-free style).
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+SOCK_PATH = os.environ.get("LAVA_RELAY_SOCK", "/run/lava-relay.sock")
+AUTOSSH_LOG = os.environ.get("LAVA_SUPERVISOR_LOG", "/run/lava-autossh.log")
+# How long to wait for the dispatcher's ack. Power scripts take a few seconds; a much
+# longer wait usually means the LAVA instance lacks DEVICECMD or the command wedged.
+DEVICECMD_TIMEOUT = float(os.environ.get("LAVA_DEVICECMD_TIMEOUT", "90"))
+
+_ACK_RE = re.compile(rb"<LAVA_DEVICECMD_ACK (\S+) (\d+)>")
+
+_stdout_lock = threading.Lock()
+
+# one DEVICECMD in flight at a time (the ack only carries <name>, not a request id)
+_dev_lock = threading.Lock()
+_ack_cond = threading.Condition()
+_pending_name: str | None = None
+_pending_rc: int | None = None
+
+
+def emit(text: str) -> None:
+    """Write to the test-shell pty, serialised so markers never interleave."""
+    with _stdout_lock:
+        sys.stdout.buffer.write(text.encode())
+        sys.stdout.buffer.flush()
+
+
+def _stdin_reader() -> None:
+    global _pending_rc
+    for raw in iter(sys.stdin.buffer.readline, b""):
+        m = _ACK_RE.search(raw)
+        if not m:
+            continue
+        name = m.group(1).decode(errors="replace")
+        rc = int(m.group(2))
+        with _ack_cond:
+            if _pending_name is not None and name == _pending_name:
+                _pending_rc = rc
+                _ack_cond.notify_all()
+
+
+def device_command(name: str) -> int:
+    global _pending_name, _pending_rc
+    with _dev_lock:
+        with _ack_cond:
+            _pending_name = name
+            _pending_rc = None
+        emit(f"<LAVA_SIGNAL_DEVICECMD {name}>\n")
+        with _ack_cond:
+            got = _ack_cond.wait_for(
+                lambda: _pending_rc is not None, timeout=DEVICECMD_TIMEOUT
+            )
+            rc = _pending_rc if got else 1
+            _pending_name = None
+        return rc if rc is not None else 1
+
+
+def _valid_token(s: str) -> bool:
+    return bool(s) and not any(c.isspace() for c in s) and ">" not in s
+
+
+def _handle_client(conn: socket.socket) -> None:
+    try:
+        f = conn.makefile("rwb")
+        line = f.readline()
+        if not line:
+            return
+        parts = line.decode(errors="replace").rstrip("\n").split(" ", 1)
+        verb = parts[0]
+        arg = parts[1] if len(parts) > 1 else ""
+        if verb == "cmd":
+            name = arg.strip()
+            if not _valid_token(name):
+                f.write(b"err invalid name\n")
+            else:
+                f.write(f"rc {device_command(name)}\n".encode())
+        elif verb == "signal":
+            if not arg or ">" in arg or "\n" in arg:
+                f.write(b"err invalid signal\n")
+            else:
+                emit(f"<LAVA_SIGNAL_{arg}>\n")
+                f.write(b"ok\n")
+        else:
+            f.write(b"err unknown verb\n")
+        f.flush()
+    except OSError:
+        pass
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+def _serve(sock: socket.socket) -> None:
+    while True:
+        try:
+            conn, _ = sock.accept()
+        except OSError:
+            return
+        threading.Thread(target=_handle_client, args=(conn,), daemon=True).start()
+
+
+def run_tunnel(argv: list[str], attempts: int, delay: float) -> int:
+    """Keep the reverse tunnel up; exit non-zero if it can't be sustained."""
+    os.environ["AUTOSSH_GATETIME"] = "0"
+    logf = open(AUTOSSH_LOG, "ab", buffering=0)
+    for i in range(1, attempts + 1):
+        emit(f"lava-mcp: gateway connect attempt {i}/{attempts}\n")
+        subprocess.call(argv, stdout=logf, stderr=logf)
+        emit(f"lava-mcp: gateway connection exited (attempt {i}), retrying in {delay}s\n")
+        time.sleep(delay)
+    emit(f"lava-mcp: giving up after {attempts} gateway connect attempts\n")
+    return 1
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--attempts", type=int, default=10)
+    ap.add_argument("--retry-delay", type=float, default=5.0)
+    ap.add_argument("rest", nargs=argparse.REMAINDER)
+    args = ap.parse_args()
+    argv = args.rest[1:] if args.rest and args.rest[0] == "--" else args.rest
+    if not argv:
+        sys.stderr.write("lava-session-supervisor: no tunnel command given\n")
+        return 2
+
+    try:
+        os.unlink(SOCK_PATH)
+    except FileNotFoundError:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(SOCK_PATH)
+    os.chmod(SOCK_PATH, 0o666)
+    sock.listen(16)
+    threading.Thread(target=_serve, args=(sock,), daemon=True).start()
+    threading.Thread(target=_stdin_reader, daemon=True).start()
+    emit(f"lava-mcp: session relay listening on {SOCK_PATH}\n")
+
+    return run_tunnel(argv, args.attempts, args.retry_delay)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

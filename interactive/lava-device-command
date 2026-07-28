@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Run a LAVA device command from anywhere in a lava-mcp board session.
+
+Talks to the session supervisor's relay (LAVA_RELAY_SOCK) so the DEVICECMD exchange
+happens on the test-shell pty the dispatcher watches — which an ssh session's own pty
+is not. Exits with the command's remote exit status (0 = ran ok; non-zero = did not
+run or failed; the job log carries the detail).
+
+  usage: lava-device-command <name>
+  e.g.:  lava-device-command power_off
+         lava-device-command hard_reset
+"""
+import os
+import socket
+import sys
+
+SOCK = os.environ.get("LAVA_RELAY_SOCK", "/run/lava-relay.sock")
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or not sys.argv[1]:
+        sys.stderr.write("usage: lava-device-command <name>\n")
+        return 2
+    name = sys.argv[1]
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(300)
+        s.connect(SOCK)
+    except OSError as exc:
+        sys.stderr.write(
+            f"lava-device-command: relay unavailable ({exc}); "
+            "is this a lava-mcp board session?\n"
+        )
+        return 1
+    try:
+        s.sendall(f"cmd {name}\n".encode())
+        resp = s.makefile("rb").readline().decode(errors="replace").strip()
+    except OSError as exc:
+        sys.stderr.write(f"lava-device-command: relay error ({exc})\n")
+        return 1
+    if resp.startswith("rc "):
+        try:
+            return int(resp[3:].strip() or "1")
+        except ValueError:
+            return 1
+    sys.stderr.write(f"lava-device-command: {resp or 'no response'}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
