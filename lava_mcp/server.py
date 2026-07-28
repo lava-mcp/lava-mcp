@@ -68,6 +68,22 @@ There are TWO different ways to get an interactive shell/console, for different 
      git clone https://github.com/linux-msm/qdl && make -C qdl
      lsusb | grep -i '05c6:9008'   # board present in EDL mode; qdl can now flash it
 
+   Power/recovery control. A board session runs in a container next to the board and
+   has no direct power over it — the LAVA_*_COMMAND values in its env call
+   dispatcher-host tools that aren't in the container. Instead it asks the dispatcher
+   to run the device's LAVA command on the worker: call
+   run_device_command(session_id, name), or inside a shell run `lava-device-command
+   <name>` (aliases: lava-power-on, lava-power-off, lava-hard-reset). Names: power_on,
+   power_off, hard_reset, recovery_mode, recovery_exit, pre_power_command,
+   pre_os_command, and any device user_commands (e.g. USB-port toggles). This is how
+   you power-cycle a board into EDL for flashing, or recover one that has wedged. It
+   returns the command's exit status (0 = ran). Two things: (a) a power cycle makes
+   the DUT re-enumerate over USB, so wait for its lsusb entry / device nodes to
+   reappear before adb/fastboot/qdl rather than assuming they're there; (b) it needs a
+   LAVA instance that supports the device-command relay — a non-zero/unavailable
+   result means the instance lacks it. (A session can likewise record LAVA results
+   with `lava-signal 'TESTCASE TEST_CASE_ID=x RESULT=pass'`.)
+
 2. Serial console — the board's *own* serial console (UART): boot/kernel logs, the
    login prompt, a shell on the booted board. Use it when you need what's actually on
    the board, or console access with no DUT networking. Reach for it to interact with
