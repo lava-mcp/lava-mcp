@@ -11,7 +11,10 @@ requires-python = ">=3.11"
 license = "GPL-2.0-or-later"
 authors = [{ name = "Matt Hart" }]
 dependencies = [
-    "mcp>=1.0",
+    # Cap below 2.0: mcp 2.x drops the `mcp.server.fastmcp` import path this server
+    # uses (a fresh unpinned build pulled 2.0 and failed at import). Stay on the 1.x
+    # FastMCP until we migrate.
+    "mcp>=1.0,<2",
     "requests>=2.28",
     "PyYAML>=6.0",
     "asyncssh>=2.14",
