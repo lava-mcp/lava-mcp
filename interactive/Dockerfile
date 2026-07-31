@@ -6,8 +6,8 @@
 # gateway, so the gateway can run commands against the board (qdl/fastboot/adb/sh).
 #
 # Build & publish (override LAVA_MCP_INTERACTIVE_IMAGE if you host it elsewhere):
-#   docker build -t ghcr.io/mattface/lava-mcp/interactive:latest interactive/
-#   docker push  ghcr.io/mattface/lava-mcp/interactive:latest
+#   docker build -t ghcr.io/lava-mcp/lava-mcp/interactive:latest interactive/
+#   docker push  ghcr.io/lava-mcp/lava-mcp/interactive:latest
 #
 # Debian base on purpose: a session can `apt-get install` or build any extra
 # tooling it needs at runtime (e.g. a newer/custom flashing tool from source).

@@ -204,7 +204,7 @@ should be owner-scoped too.
 
 ## D. Deployment hygiene (not a code feature) 🔵
 
-Pin the factory compose to an immutable image (`ghcr.io/mattface/lava-mcp@sha256:…` or a
+Pin the factory compose to an immutable image (`ghcr.io/lava-mcp/lava-mcp@sha256:…` or a
 `type=sha` tag) instead of `:latest`, so a staging deploy is reproducible and does not
 silently move when the image is rebuilt.
 

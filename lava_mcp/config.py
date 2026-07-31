@@ -81,8 +81,8 @@ class Config:
     gateway_human_key_ttl: float = 3600.0
     # interactive session assets (container image + test definition location).
     # Override via LAVA_MCP_INTERACTIVE_* if you host the image/repo elsewhere.
-    interactive_image: str = "ghcr.io/mattface/lava-mcp/interactive:latest"
-    interactive_repo: str = "https://github.com/mattface/lava-mcp.git"
+    interactive_image: str = "ghcr.io/lava-mcp/lava-mcp/interactive:latest"
+    interactive_repo: str = "https://github.com/lava-mcp/lava-mcp.git"
     interactive_path: str = "interactive/ssh-gateway.yaml"
 
     @classmethod
@@ -118,11 +118,11 @@ class Config:
             ),
             interactive_image=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_IMAGE",
-                "ghcr.io/mattface/lava-mcp/interactive:latest",
+                "ghcr.io/lava-mcp/lava-mcp/interactive:latest",
             ),
             interactive_repo=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_REPO",
-                "https://github.com/mattface/lava-mcp.git",
+                "https://github.com/lava-mcp/lava-mcp.git",
             ),
             interactive_path=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_PATH", "interactive/ssh-gateway.yaml"
