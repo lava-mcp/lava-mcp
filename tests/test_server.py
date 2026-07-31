@@ -7,11 +7,13 @@ import pytest
 from lava_mcp.config import Config
 from lava_mcp.server import (
     _WS_NOT_CONFIGURED,
+    _discover_console_target,
     _enforce_user_allowlist,
     _lava_username,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
+    _unproxyable_console_note,
     build_console_ready_action,
     build_console_services_action,
     build_console_ssh_command,
@@ -21,6 +23,50 @@ from lava_mcp.server import (
     deploy_urls_from_definition,
     url_match_score,
 )
+
+
+class _FakeConsoleClient:
+    """Minimal client stub for _discover_console_target: returns a scheduled job with
+    an assigned device and that device's console connection command."""
+
+    def __init__(self, actual_device: str | None, connect_cmd: str | None) -> None:
+        self._actual_device = actual_device
+        self._connect_cmd = connect_cmd
+
+    def get_job(self, job_id: object) -> dict:
+        return {"actual_device": self._actual_device}
+
+    def console_connection_command(self, hostname: str) -> str | None:
+        return self._connect_cmd
+
+
+def test_discover_console_target_pending_unsupported_and_ok() -> None:
+    # no job id -> pending
+    assert _discover_console_target(_FakeConsoleClient("air-01", "x"), None) == {
+        "status": "pending"
+    }
+    # job not scheduled yet (no actual_device) -> pending
+    assert _discover_console_target(_FakeConsoleClient(None, None), 42) == {
+        "status": "pending"
+    }
+    # scheduled onto a board whose console is a proxyable ser2net telnet -> ok
+    ok = _discover_console_target(
+        _FakeConsoleClient("air-01", "telnet ser2net 7095"), 42
+    )
+    assert ok == {
+        "status": "ok",
+        "host": "ser2net",
+        "port": "7095",
+        "hostname": "air-01",
+    }
+    # scheduled onto a board with a non-ser2net console -> unsupported
+    bad = _discover_console_target(
+        _FakeConsoleClient("air-01", "telnet termserv 4001"), 42
+    )
+    assert bad["status"] == "unsupported"
+    assert bad["command"] == "telnet termserv 4001"
+    assert "termserv" in _unproxyable_console_note(bad)
+    assert "board session" in _unproxyable_console_note(bad)
 
 
 class _OwnedSession:
