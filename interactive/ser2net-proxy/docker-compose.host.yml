@@ -14,7 +14,7 @@
 # SESSION_PRIVATE_KEY_B64 (dial-out). Missing values fall back to script defaults.
 services:
   ser2net-proxy:
-    image: ghcr.io/mattface/lava-mcp/ser2net-proxy:latest
+    image: ghcr.io/lava-mcp/lava-mcp/ser2net-proxy:latest
     pull_policy: always
     network_mode: host
     env_file:

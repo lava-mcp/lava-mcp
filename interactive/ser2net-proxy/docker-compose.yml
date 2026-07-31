@@ -21,7 +21,7 @@
 #   GATEWAY_HOST, GATEWAY_WS_URL, SESSION_ID, REVERSE_PORT, SESSION_PRIVATE_KEY_B64  (dial-out)
 services:
   ser2net-proxy:
-    image: ghcr.io/mattface/lava-mcp/ser2net-proxy:latest
+    image: ghcr.io/lava-mcp/lava-mcp/ser2net-proxy:latest
     pull_policy: always
     networks: [lab]
     # LAVA writes the job+device `environment:` to a .env at the *repo root* — but

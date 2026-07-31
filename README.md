@@ -121,7 +121,7 @@ Then:
 - `close_board_session(session_id)` cancels the job and frees the board.
 
 The container image + test definition live in this repo under `interactive/`
-(published to `ghcr.io/mattface/lava-mcp/interactive` and fetched from this repo by
+(published to `ghcr.io/lava-mcp/lava-mcp/interactive` and fetched from this repo by
 the lab worker); the parameter contract is in `lava_mcp/jobs.py`.
 
 The container is **Debian** (running as root), so a session can `apt-get` or build
@@ -362,7 +362,11 @@ pytest
 
 - The interactive **board sessions** gateway is implemented here, along with the
   container image + test definition the in-job container runs (`interactive/`,
-  published to `ghcr.io/mattface/lava-mcp/interactive`).
+  published to `ghcr.io/lava-mcp/lava-mcp/interactive`).
 - Human shell proxy + interactive PTY through the gateway (design above).
 - Direct serial console for humans via ser2net, gated on a `console-ready` job signal
   (design above).
+
+## License
+
+MIT — see [LICENSE](LICENSE).

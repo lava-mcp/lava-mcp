@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "MCP server exposing a LAVA instance to agents"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "GPL-2.0-or-later"
+license = "MIT"
 authors = [{ name = "Matt Hart" }]
 dependencies = [
     # Cap below 2.0: mcp 2.x drops the `mcp.server.fastmcp` import path this server
