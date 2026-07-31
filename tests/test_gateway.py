@@ -94,6 +94,48 @@ def test_build_interactive_job_carries_session_params() -> None:
     assert params["SESSION_PUBLIC_KEY"] == session.public_key
 
 
+def test_build_interactive_job_with_console_adds_proxy_but_no_ser2net_endpoint() -> (
+    None
+):
+    cfg = Config(
+        url="https://lava.example.com",
+        gateway_advertise_host="gw.example.com",
+        gateway_ws_url="wss://gw.example.com/gateway-ssh",
+    )
+    mgr = SessionManager()
+    session = mgr.create(device_type="qcs6490")
+    console = mgr.create(device_type="qcs6490", kind="console")
+    job = yaml.safe_load(
+        build_interactive_job(
+            cfg, session, device_type="qcs6490", console_session=console
+        )
+    )
+    # the ser2net-proxy is the FIRST action so it watches from the start
+    services = job["actions"][0]["test"]
+    assert services["namespace"] == "console"
+    assert services["services"][0]["name"] == "ser2net-proxy"
+    env = job["environment"]
+    # the per-board endpoint is NOT baked in — it is pushed at runtime via SETPORT
+    assert "SER2NET_HOST" not in env
+    assert "SER2NET_PORT" not in env
+    # but the network, writable-from-start sentinel, and console dial-out ARE present
+    assert env["SER2NET_NETWORK"] == "lava-dispatcher_default"
+    assert env["CONSOLE_READY_SENTINEL"] == ""  # board session: writable from start
+    assert env["SESSION_ID"] == console.session_id
+    assert env["REVERSE_PORT"] == str(console.reverse_port)
+    assert env["GATEWAY_WS_URL"] == "wss://gw.example.com/gateway-ssh"
+    assert "SESSION_PRIVATE_KEY_B64" in env
+
+
+def test_set_console_target_stores_target_when_not_connected() -> None:
+    gw = Gateway(Config(url="https://lava.example.com"))
+    session = gw.manager.create(device_type="qcs6490", kind="console")
+    # not connected and no gateway loop running -> nothing delivered, but stored so a
+    # later attach can re-push it
+    assert gw.set_console_target(session.session_id, "ser2net", "7095") is False
+    assert session.console_target == ("ser2net", "7095")
+
+
 def test_build_interactive_job_pins_remote_access_tag_without_user_tags() -> None:
     cfg = Config(url="https://lava.example.com")
     session = SessionManager().create(device_type="qcs6490")

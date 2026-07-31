@@ -21,7 +21,7 @@ logger = logging.getLogger("lava_mcp")
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import LavaClient, client_from
+from .client import LavaClient, client_from, ser2net_endpoint
 from .config import Config
 from .gateway import Gateway
 from .jobs import build_interactive_job
@@ -347,6 +347,128 @@ def _require_test_services_device(client: LavaClient, hostname: str) -> None:
         )
 
 
+def _require_test_services_device_type(client: LavaClient, device_type: str) -> None:
+    """Pre-flight for a device_type console: a representative device must allow Test
+    Services. We can't know which board LAVA will assign, but devices of a type share
+    this setting, so a representative check fails early with a clear message rather than
+    submitting a job LAVA rejects at validation. Skips the check if none is found."""
+    try:
+        page = client.list_devices(device_type=device_type, limit=5)
+    except Exception:  # noqa: BLE001 - pre-flight is best-effort
+        return
+    for row in page.get("results", []) or []:
+        host = row.get("hostname")
+        if not host:
+            continue
+        try:
+            allowed = client.allows_test_services(host)
+        except Exception:  # noqa: BLE001 - skip a device we can't read
+            continue
+        if not allowed:
+            raise PermissionError(
+                f"{device_type!r} devices do not enable 'allow_test_services' "
+                "(needed for the serial console) — open the board session without "
+                "console=true, or ask a lab admin to enable it."
+            )
+        return  # one representative device is enough
+
+
+def _discover_console_target(client: LavaClient, job_id: int | str | None) -> dict:
+    """Resolve the serial console for the board a job actually landed on.
+
+    The ser2net port is per-board and only known once LAVA schedules the job onto a
+    specific device, so it cannot be discovered up-front from a representative device.
+    This reads the job's ``actual_device`` (set at scheduling) and inspects that board's
+    connection command. Works for both a board session (Mode 1) and a standalone console
+    job (Mode 2) — both have a job on a real board. Returns a status dict:
+
+      {"status": "pending"}                     job not scheduled / device unknown yet
+      {"status": "unsupported", "command": ...} console command is not a ser2net telnet
+                                                we can proxy (another lab's tooling)
+      {"status": "ok", "host": ..., "port": ...} proxyable ser2net endpoint
+    """
+    if job_id is None:
+        return {"status": "pending"}
+    try:
+        job = client.get_job(job_id)
+        host = job.get("actual_device") if isinstance(job, dict) else None
+        if not host:
+            return {"status": "pending"}
+        cmd = client.console_connection_command(host)
+    except Exception:  # noqa: BLE001 - discovery is best-effort
+        return {"status": "pending"}
+    endpoint = ser2net_endpoint(cmd or "")
+    if endpoint is None:
+        return {"status": "unsupported", "command": cmd, "hostname": host}
+    return {"status": "ok", "host": endpoint[0], "port": endpoint[1], "hostname": host}
+
+
+def _unproxyable_console_note(res: dict) -> str:
+    """Agent-facing explanation when a board's console cannot be proxied."""
+    cmd = res.get("command")
+    how = f"via {cmd!r}" if cmd else "in a way lava-mcp did not recognise"
+    return (
+        f"serial console unavailable: this lab reaches board {res.get('hostname')}'s "
+        f"console {how}, but lava-mcp can only proxy ser2net (telnet) consoles. Use a "
+        "board session (open_board_session without console) for host-side access."
+    )
+
+
+async def _ensure_console_target(
+    client: LavaClient, gateway: Any, session: Any, job_id: int | str | None
+) -> dict:
+    """Resolve a console session's ser2net endpoint (from the assigned board) and push
+    it to the proxy over the reverse tunnel. Idempotent — safe to call repeatedly as a
+    job schedules; re-pushes an already-known target. Returns the status dict from
+    _discover_console_target (or an "ok" dict for an already-known target)."""
+    if session.console_target is not None:
+        host, port = session.console_target
+        await asyncio.to_thread(
+            gateway.set_console_target, session.session_id, host, port
+        )
+        return {"status": "ok", "host": host, "port": port}
+    res = await asyncio.to_thread(_discover_console_target, client, job_id)
+    if res.get("status") == "ok":
+        session.console_target = (res["host"], res["port"])
+        await asyncio.to_thread(
+            gateway.set_console_target, session.session_id, res["host"], res["port"]
+        )
+    return res
+
+
+async def _wire_console(
+    client: LavaClient,
+    gateway: Any,
+    session: Any,
+    console_session: Any,
+    board_connected: bool,
+    wait_seconds: int,
+) -> str:
+    """Wire a board session's paired console proxy to the assigned board's ser2net
+    endpoint. Returns a note for the caller/agent."""
+    if not board_connected:
+        return (
+            "board session has not connected yet; the serial console will be wired "
+            "when you call attach_console(console_session_id)"
+        )
+    # wait for the proxy to dial in, then push the endpoint the board actually got
+    await gateway.wait_connected(
+        console_session.session_id, timeout=min(wait_seconds, 60)
+    )
+    res = await _ensure_console_target(client, gateway, console_session, session.job_id)
+    if res.get("status") == "unsupported":
+        return _unproxyable_console_note(res)
+    if res.get("status") != "ok":
+        return (
+            "could not resolve the board's console endpoint yet (job may still be "
+            "scheduling) — retry with attach_console(console_session_id)"
+        )
+    return (
+        "call attach_console(console_session_id) for the live serial console "
+        f"(endpoint {res['host']}:{res['port']})"
+    )
+
+
 def _require_owner(session: Any, username: str) -> None:
     """Raise ``PermissionError`` unless ``username`` owns ``session``.
 
@@ -667,6 +789,7 @@ def build_server(config: Config) -> FastMCP:
             image: str | None = None,
             wait_seconds: int = 120,
             timeout_minutes: int = 60,
+            console: bool = False,
         ) -> Any:
             """Open a shell in a container running *next to* the board (not on it).
 
@@ -677,6 +800,12 @@ def build_server(config: Config) -> FastMCP:
             dials back to this gateway over SSH; waits up to wait_seconds for it to
             connect, then the session is usable via run_in_session / attach_shell.
             Only devices tagged for remote access can host one.
+
+            Set console=true to ALSO get the board's serial console alongside the
+            session (for bring-up: flash over USB while watching the UART). The same
+            job runs the ser2net-proxy; the result includes a console_session_id — call
+            attach_console(console_session_id) for the live console. Closing the board
+            session closes the console too. Needs a device that allows Test Services.
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -685,7 +814,15 @@ def build_server(config: Config) -> FastMCP:
                 client(), device_type, config.remote_access_tag
             )
             await asyncio.to_thread(gateway.ensure_started)
+            console_session = None
+            if console:
+                _require_test_services_device_type(client(), device_type)
+                console_session = gateway.manager.create(
+                    device_type=device_type, kind="console", owner=user
+                )
             session = gateway.manager.create(device_type=device_type, owner=user)
+            if console_session is not None:
+                session.console_session_id = console_session.session_id
             job_yaml = build_interactive_job(
                 config,
                 session,
@@ -693,15 +830,23 @@ def build_server(config: Config) -> FastMCP:
                 tags=tags,
                 image=image,
                 timeout_minutes=timeout_minutes,
+                console_session=console_session,
             )
             result = client().submit_job(job_yaml)
             job_ids = result.get("job_ids") if isinstance(result, dict) else None
             session.job_id = job_ids[0] if job_ids else None
+            if console_session is not None:
+                console_session.job_id = session.job_id
             connected = await gateway.wait_connected(
                 session.session_id, timeout=wait_seconds
             )
             view = session.public_view()
             view["connected"] = connected
+            if console_session is not None:
+                view["console_session_id"] = console_session.session_id
+                view["console_note"] = await _wire_console(
+                    client(), gateway, session, console_session, connected, wait_seconds
+                )
             return view
 
         @mcp.tool()
@@ -768,9 +913,21 @@ def build_server(config: Config) -> FastMCP:
             await asyncio.to_thread(gateway.ensure_started)
             gateway.manager.remove(session_id)
             session.revoke_human_keys()
+            # a paired console session shares the same job; drop it too so it doesn't
+            # linger (the job cancel below tears its proxy down)
+            if session.console_session_id:
+                console = gateway.manager.remove(session.console_session_id)
+                if console is not None:
+                    console.revoke_human_keys()
+                    console.status = "closed"
             cancel = client().cancel_job(session.job_id) if session.job_id else None
             session.status = "closed"
-            return {"closed": True, "job_id": session.job_id, "cancel": cancel}
+            return {
+                "closed": True,
+                "job_id": session.job_id,
+                "cancel": cancel,
+                "console_session_closed": session.console_session_id,
+            }
 
         @mcp.tool()
         async def list_board_sessions() -> Any:
@@ -932,15 +1089,15 @@ def build_server(config: Config) -> FastMCP:
                     ),
                     "step_2_environment": (
                         "Put job_environment (above) into the job's top-level "
-                        "`environment:`, plus these for your board: "
-                        "SER2NET_HOST (ser2net hostname, usually 'ser2net'); "
-                        "SER2NET_PORT (the board's ser2net port — read it from the "
-                        "device's connection_command, e.g. 'telnet ser2net 7095' -> "
-                        "7095, via get_device/get_device_dictionary); "
+                        "`environment:`, plus: "
                         "SER2NET_NETWORK (docker network ser2net is on, usually "
                         "'lava-dispatcher_default'); "
                         "CONSOLE_READY_SENTINEL (must match the echo in step 3, e.g. "
-                        "LAVA_MCP_CONSOLE_WRITABLE)."
+                        "LAVA_MCP_CONSOLE_WRITABLE). "
+                        "Do NOT set SER2NET_HOST/SER2NET_PORT: the console port is "
+                        "per-board and unknown until LAVA schedules the job, so the "
+                        "server discovers the assigned board's endpoint and pushes it "
+                        "to the proxy for you (see step 'then')."
                     ),
                     "step_3_console_ready_action": build_console_ready_action(),
                     "step_3_note": (
@@ -953,16 +1110,23 @@ def build_server(config: Config) -> FastMCP:
                         "keepalive is needed; end the session by exiting the shell."
                     ),
                     "then": (
-                        "Submit the job, then poll check_console_ready(job_id) until "
-                        "it returns ready:true (do NOT scrape logs yourself). Once "
-                        "ready, call attach_console(session_id) for a writable console."
+                        "Submit the job, then poll "
+                        "check_console_ready(job_id, session_id=session_id) until it "
+                        "returns ready:true (do NOT scrape logs yourself). Passing "
+                        "session_id lets the server wire the console proxy to the board "
+                        "LAVA assigned; if that board's console is not a proxyable "
+                        "ser2net telnet the reply's console_note says so (console "
+                        "unavailable — use a board session instead). Once ready, call "
+                        "attach_console(session_id) for a writable console."
                     ),
                 },
             }
 
         @mcp.tool()
-        def check_console_ready(
-            job_id: int, sentinel: str = "LAVA_MCP_CONSOLE_WRITABLE"
+        async def check_console_ready(
+            job_id: int,
+            sentinel: str = "LAVA_MCP_CONSOLE_WRITABLE",
+            session_id: str | None = None,
         ) -> Any:
             """Has a console job reached console-ready (writable) state yet?
 
@@ -973,13 +1137,20 @@ def build_server(config: Config) -> FastMCP:
             attach_console gives a writable console; if job_state is Finished/Canceling
             the board never signalled, so stop polling. Pass sentinel if your job set a
             custom CONSOLE_READY_SENTINEL.
+
+            Pass session_id (from open_console_session) so the server can wire the
+            console proxy to the board LAVA actually assigned: the ser2net port is
+            per-board and unknown until the job is scheduled, so the server reads the
+            job's assigned device and pushes the endpoint to the proxy. If that board's
+            console is not a proxyable ser2net telnet, the reply includes a
+            console_note explaining the console is unavailable.
             """
             logs = client().get_job_logs(job_id)
             ready = console_ready_in_logs(logs, sentinel)
             job = client().get_job(job_id)
             state = job.get("state") if isinstance(job, dict) else None
             health = job.get("health") if isinstance(job, dict) else None
-            return {
+            result = {
                 "job_id": job_id,
                 "ready": ready,
                 "sentinel": sentinel,
@@ -992,9 +1163,27 @@ def build_server(config: Config) -> FastMCP:
                     "Finished/Canceling (the board never echoed the sentinel)."
                 ),
             }
+            if session_id:
+                session = gateway.manager.get(session_id)
+                if session is not None and session.kind == "console":
+                    await asyncio.to_thread(gateway.ensure_started)
+                    if session.job_id is None:
+                        session.job_id = job_id
+                    res = await _ensure_console_target(
+                        client(), gateway, session, job_id
+                    )
+                    if res.get("status") == "unsupported":
+                        result["console_note"] = _unproxyable_console_note(res)
+                        result["console_proxyable"] = False
+                    elif res.get("status") == "ok":
+                        result["console_note"] = (
+                            f"console proxy wired to {res['host']}:{res['port']}"
+                        )
+                        result["console_proxyable"] = True
+            return result
 
         @mcp.tool()
-        async def attach_console(session_id: str) -> Any:
+        async def attach_console(session_id: str, job_id: int | None = None) -> Any:
             """Get a command to attach to the board's serial console (UART).
 
             The interactive form of a console session (Way 2): the board's own console,
@@ -1002,6 +1191,13 @@ def build_server(config: Config) -> FastMCP:
             authorised for this session and returns an ``ssh -W`` command that tunnels
             to the console through the gateway. The board/proxy key is never disclosed.
             The console is read-only until the job emits console-ready.
+
+            Pass job_id for a standalone console session (open_console_session) if you
+            have not already wired it via check_console_ready(session_id=...): the server
+            resolves the board LAVA assigned and pushes its ser2net endpoint to the
+            proxy. If that board's console is not a proxyable ser2net telnet, the reply's
+            ``console_note`` says the console is unavailable (and no ssh command is
+            returned).
             """
             user = require_user(config.ssh_allow_users)
             if not config.gateway_ws_url:
@@ -1013,6 +1209,20 @@ def build_server(config: Config) -> FastMCP:
             _require_owner(session, user)
             if session.kind != "console":
                 return {"error": f"session {session_id} is not a console session"}
+            # ensure the proxy knows which ser2net endpoint to relay (idempotent); for a
+            # board-session console this was wired at open time, so console_target is
+            # already set and this just re-pushes it.
+            if session.job_id is None and job_id is not None:
+                session.job_id = job_id
+            res = await _ensure_console_target(
+                client(), gateway, session, session.job_id
+            )
+            if res.get("status") == "unsupported":
+                return {
+                    "session_id": session_id,
+                    "console_available": False,
+                    "console_note": _unproxyable_console_note(res),
+                }
             info = gateway.attach_human(session_id)
             key_file = f"lava-console-{session_id}.key"
             ssh = build_console_ssh_command(

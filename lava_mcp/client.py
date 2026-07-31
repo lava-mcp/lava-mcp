@@ -125,6 +125,33 @@ class LavaClient:
             "boot_methods": sorted(boot.keys()),
         }
 
+    def console_connection_command(self, hostname: str) -> str | None:
+        """The device's primary serial-console connect command, verbatim from its
+        rendered dictionary (e.g. ``telnet ser2net 7095``). Returns None if none.
+
+        This is per-board — the port in particular is fixed to the physical board — so
+        it is only meaningful for a specific device, not a device-type.
+        """
+        data = yaml.safe_load(self.get_device_dictionary(hostname, render=True)) or {}
+        commands = data.get("commands", {}) if isinstance(data, dict) else {}
+        conns = commands.get("connections", {}) or {}
+        cmd: Any = None
+        for conn in conns.values():
+            if isinstance(conn, dict) and "primary" in (conn.get("tags") or []):
+                cmd = conn.get("connect")
+                break
+        if cmd is None and conns:
+            first = next(iter(conns.values()))
+            cmd = first.get("connect") if isinstance(first, dict) else None
+        if cmd is None:
+            cmd = commands.get("connect")
+        return cmd if isinstance(cmd, str) else None
+
+    def console_endpoint(self, hostname: str) -> tuple[str, str] | None:
+        """(host, port) of the device's serial console IF it is a proxyable ser2net
+        endpoint (see ``ser2net_endpoint``), else None."""
+        return ser2net_endpoint(self.console_connection_command(hostname) or "")
+
     def allows_test_services(self, hostname: str) -> bool:
         """True if the device opts into LAVA Test Services (``allow_test_services``).
 
@@ -187,6 +214,22 @@ class LavaClient:
 
     def resubmit_job(self, job_id: int | str) -> Any:
         return _maybe_json(self._request("POST", f"jobs/{job_id}/resubmit/"))
+
+
+def ser2net_endpoint(cmd: str) -> tuple[str, str] | None:
+    """(host, port) if ``cmd`` is a ser2net-style TCP console command we can proxy,
+    else None.
+
+    The console proxy opens a raw TCP connection to host:port and only reaches the
+    lab's ``ser2net`` container on the worker's docker network, so only ser2net telnet
+    consoles are proxyable. Other labs may drive the console with different tooling
+    (a terminal server, a custom script, LXC, etc.) — those are NOT proxyable and the
+    caller should tell the agent the serial console is unavailable.
+    """
+    parts = (cmd or "").split()
+    if len(parts) >= 3 and parts[0] in ("telnet", "nc", "ncat") and "ser2net" in cmd:
+        return parts[1], parts[2]
+    return None
 
 
 def device_dict_allows_test_services(dict_text: str) -> bool:

@@ -19,6 +19,7 @@ gets torn down when that task ends). Cross-loop calls go through
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import socket
@@ -36,6 +37,13 @@ from .config import Config
 logger = logging.getLogger("lava_mcp.gateway")
 
 _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+
+# Control line the gateway sends to a console proxy, over the session's reverse
+# tunnel, to tell it which ser2net endpoint to connect to. The port is per-board and
+# only known once LAVA schedules the job, so it cannot be baked into the job def — the
+# board container reports it at runtime and the gateway relays it here. Prefixed with a
+# NUL + magic so the proxy can tell it apart from console watcher input.
+CONSOLE_SETPORT_PREFIX = b"\x00LAVA-MCP-SETPORT "
 
 
 class GatewayError(RuntimeError):
@@ -134,6 +142,12 @@ class BoardSession:
     job_id: int | None = None
     # LAVA username that opened the session; only the owner may operate on it
     owner: str | None = None
+    # a container board session may pair a console session (same job) for the board's
+    # serial console; closing the board session also closes it
+    console_session_id: str | None = None
+    # (host, port) of the ser2net endpoint this console session should relay, discovered
+    # from the board container at runtime and pushed to the proxy via set_console_target
+    console_target: tuple[str, str] | None = None
     status: str = "pending"  # pending -> connected -> closed
     created: float = field(default_factory=time.time)
     # short-lived public keys authorised for human access, mapped to expiry (epoch s)
@@ -506,6 +520,55 @@ class Gateway:
         return await asyncio.get_event_loop().run_in_executor(
             None, session._connected.wait, timeout
         )
+
+    def set_console_target(self, session_id: str, host: str, port: str) -> bool:
+        """Tell a console session's proxy which ser2net endpoint to relay.
+
+        Opens a short-lived connection to the session's loopback reverse port (which
+        rides the proxy's own reverse tunnel out to it, exactly like a human ``-W``)
+        and writes a single ``SETPORT`` control line. The proxy recognises the control
+        prefix, (re)connects to ``host:port``, and closes this connection. Idempotent:
+        safe to call again (e.g. from attach_console) if an earlier push raced the
+        proxy's dial-out. Returns True if the line was delivered.
+        """
+        session = self.manager.get(session_id)
+        if session is None:
+            raise GatewayError(f"unknown session {session_id}")
+        session.console_target = (host, str(port))
+        if session.status != "connected" or self._loop is None:
+            return False
+        future = asyncio.run_coroutine_threadsafe(
+            self._set_console_target(session, host, str(port)), self._loop
+        )
+        return bool(future.result(timeout=15))
+
+    async def _set_console_target(
+        self, session: BoardSession, host: str, port: str
+    ) -> bool:
+        line = CONSOLE_SETPORT_PREFIX + f"{host} {port}\n".encode()
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", session.reverse_port
+            )
+            writer.write(line)
+            await writer.drain()
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        except OSError as exc:
+            logger.warning(
+                "gateway: could not push console target to %s: %s",
+                session.session_id,
+                exc,
+            )
+            return False
+        logger.info(
+            "gateway: pushed console target %s:%s to %s",
+            host,
+            port,
+            session.session_id,
+        )
+        return True
 
     async def run(
         self, session_id: str, command: str, timeout: float = 120

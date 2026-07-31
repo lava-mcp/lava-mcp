@@ -8,8 +8,22 @@ from lava_mcp.client import (
     LavaError,
     client_from,
     device_dict_allows_test_services,
+    ser2net_endpoint,
 )
 from lava_mcp.config import Config
+
+
+def test_ser2net_endpoint_parses_only_proxyable_ser2net_commands() -> None:
+    # proxyable: telnet/nc/ncat to a ser2net endpoint
+    assert ser2net_endpoint("telnet ser2net 7095") == ("ser2net", "7095")
+    assert ser2net_endpoint("nc ser2net 7010") == ("ser2net", "7010")
+    assert ser2net_endpoint("ncat ser2net.lab 7000") == ("ser2net.lab", "7000")
+    # NOT proxyable: another lab's tooling / non-ser2net host / malformed
+    assert ser2net_endpoint("telnet termserv 4001") is None  # not ser2net
+    assert ser2net_endpoint("minicom -D /dev/ttyUSB0") is None
+    assert ser2net_endpoint("ssh console@host") is None
+    assert ser2net_endpoint("telnet ser2net") is None  # no port
+    assert ser2net_endpoint("") is None
 
 
 def test_device_dict_allows_test_services() -> None:
