@@ -215,6 +215,23 @@ class LavaClient:
     def resubmit_job(self, job_id: int | str) -> Any:
         return _maybe_json(self._request("POST", f"jobs/{job_id}/resubmit/"))
 
+    # -- remote artifact tokens -------------------------------------------
+    # LAVA stores per-user named download tokens (RemoteArtifactsAuth). When a
+    # deploy/test action's header VALUE matches a token name the *submitter* owns,
+    # LAVA substitutes the secret at download time — so the value never appears in
+    # the stored job definition or logs. We register the artifact-store secret under
+    # a name and reference that name in the deploy block.
+    def add_remote_artifact_token(self, name: str, token: str) -> None:
+        self._request(
+            "POST", "remote-artifact-tokens/", json={"name": name, "token": token}
+        )
+
+    def delete_remote_artifact_token(self, name: str) -> None:
+        self._request("DELETE", f"remote-artifact-tokens/{name}/")
+
+    def list_remote_artifact_tokens(self) -> Any:
+        return self._get_json("remote-artifact-tokens/")
+
 
 def ser2net_endpoint(cmd: str) -> tuple[str, str] | None:
     """(host, port) if ``cmd`` is a ser2net-style TCP console command we can proxy,

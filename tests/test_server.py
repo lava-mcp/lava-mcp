@@ -7,9 +7,11 @@ import pytest
 from lava_mcp.config import Config
 from lava_mcp.server import (
     _WS_NOT_CONFIGURED,
+    _artifact_base_url,
     _discover_console_target,
     _enforce_user_allowlist,
     _lava_username,
+    _presented_token,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
@@ -67,6 +69,31 @@ def test_discover_console_target_pending_unsupported_and_ok() -> None:
     assert bad["command"] == "telnet termserv 4001"
     assert "termserv" in _unproxyable_console_note(bad)
     assert "board session" in _unproxyable_console_note(bad)
+
+
+class _FakeReq:
+    def __init__(self, headers: dict) -> None:
+        self.headers = headers
+
+
+def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
+    # LAVA substitutes the raw secret as the header value
+    assert _presented_token(_FakeReq({"authorization": "s3cret"})) == "s3cret"
+    # humans/containers may use a scheme prefix
+    assert _presented_token(_FakeReq({"authorization": "Bearer s3cret"})) == "s3cret"
+    assert _presented_token(_FakeReq({"authorization": "token s3cret"})) == "s3cret"
+    assert _presented_token(_FakeReq({})) is None
+
+
+def test_artifact_base_url_prefers_explicit_then_derives_from_ws() -> None:
+    # explicit wins
+    cfg = Config(artifact_base_url="https://cdn.example/mcp/artifacts/")
+    assert _artifact_base_url(cfg, "/mcp") == "https://cdn.example/mcp/artifacts"
+    # derived from the gateway wss URL (same host, https, /mcp prefix)
+    cfg = Config(gateway_ws_url="wss://lab.example/mcp/gateway-ssh")
+    assert _artifact_base_url(cfg, "/mcp") == "https://lab.example/mcp/artifacts"
+    # nothing configured -> empty (store stays off)
+    assert _artifact_base_url(Config(), "/mcp") == ""
 
 
 class _OwnedSession:

@@ -84,6 +84,18 @@ class Config:
     interactive_image: str = "ghcr.io/lava-mcp/lava-mcp/interactive:latest"
     interactive_repo: str = "https://github.com/lava-mcp/lava-mcp.git"
     interactive_path: str = "interactive/ssh-gateway.yaml"
+    # temporary artifact store (hosted mode). Agents upload a build product here and
+    # LAVA (or a job) fetches it back over the same 443/Caddy path as the gateway. The
+    # external base URL is derived from gateway_ws_url unless artifact_base_url is set.
+    # A capability id + bearer token guards each artifact; retention is TTL-bounded and
+    # disk-guarded. See lava_mcp/artifacts.py.
+    artifacts_enabled: bool = False
+    artifact_dir: str = ""  # empty -> a temp subdir chosen at runtime
+    artifact_base_url: str = ""  # empty -> derived from gateway_ws_url
+    artifact_ttl_default: float = 6 * 3600.0
+    artifact_ttl_max: float = 6 * 3600.0
+    artifact_max_bytes: int = 6 * 1024**3  # per-artifact cap
+    artifact_min_free_fraction: float = 0.10  # reject uploads that cross this free line
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -126,5 +138,20 @@ class Config:
             ),
             interactive_path=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_PATH", "interactive/ssh-gateway.yaml"
+            ),
+            artifacts_enabled=_env_bool("LAVA_MCP_ARTIFACTS_ENABLED"),
+            artifact_dir=os.environ.get("LAVA_MCP_ARTIFACT_DIR", ""),
+            artifact_base_url=os.environ.get("LAVA_MCP_ARTIFACT_BASE_URL", ""),
+            artifact_ttl_default=float(
+                os.environ.get("LAVA_MCP_ARTIFACT_TTL_DEFAULT", str(6 * 3600))
+            ),
+            artifact_ttl_max=float(
+                os.environ.get("LAVA_MCP_ARTIFACT_TTL_MAX", str(6 * 3600))
+            ),
+            artifact_max_bytes=int(
+                os.environ.get("LAVA_MCP_ARTIFACT_MAX_BYTES", str(6 * 1024**3))
+            ),
+            artifact_min_free_fraction=float(
+                os.environ.get("LAVA_MCP_ARTIFACT_MIN_FREE_FRACTION", "0.10")
             ),
         )

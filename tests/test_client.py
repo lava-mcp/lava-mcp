@@ -186,6 +186,19 @@ def test_allows_test_services_false_when_unset(client: LavaClient) -> None:
 
 
 @responses.activate
+def test_remote_artifact_token_add_and_delete(client: LavaClient) -> None:
+    # register a named token (LAVA substitutes it into deploy headers at download)
+    responses.post(BASE + "remote-artifact-tokens/", json={}, status=201)
+    client.add_remote_artifact_token("lava-mcp-artifact-abc", "s3cret")
+    body = responses.calls[0].request.body
+    assert b"lava-mcp-artifact-abc" in body and b"s3cret" in body
+    # delete by name
+    responses.delete(BASE + "remote-artifact-tokens/lava-mcp-artifact-abc/", status=204)
+    client.delete_remote_artifact_token("lava-mcp-artifact-abc")
+    assert responses.calls[1].request.method == "DELETE"
+
+
+@responses.activate
 def test_get_qdl_info_parses_rendered_dictionary(client: LavaClient) -> None:
     rendered = """
 actions:

@@ -21,7 +21,8 @@ logger = logging.getLogger("lava_mcp")
 
 from mcp.server.fastmcp import FastMCP
 
-from .client import LavaClient, client_from, ser2net_endpoint
+from .artifacts import ArtifactError, ArtifactStore
+from .client import LavaClient, LavaError, client_from, ser2net_endpoint
 from .config import Config
 from .gateway import Gateway
 from .jobs import build_interactive_job
@@ -120,6 +121,17 @@ There are TWO different ways to get an interactive shell/console, for different 
    action to paste in as the first action, plus the `environment:` values to set.
    After submitting, poll check_console_ready(job_id) until ready:true (instead of
    reading logs), then call attach_console.
+
+Serving your own files to LAVA: when you have a build product (kernel, rootfs, DTB,
+script) you want a job to deploy/flash or a booted device to fetch, but no URL to host
+it at, use create_artifact_upload -> HTTP PUT -> reference it from your job. The
+temporary token it returns is registered as a LAVA *remote artifact token*, so a
+deploy action can carry the token NAME (LAVA swaps in the secret at download, keeping
+it out of the job) — the tool hands back a deploy_block and a full example snippet. It
+also returns a fetch_command (plain curl) you can run from a test action ON a booted
+device with working networking to land the file on the device itself. Artifacts
+auto-expire within hours; set the job's `visibility: personal` when it references one.
+(Only offered in hosted mode.)
 
 Handing out an SSH key (attach_shell/attach_console): the returned private_key must
 be saved to a file with `chmod 600` — ssh refuses a key file with looser permissions.
@@ -491,6 +503,125 @@ def _require_owner(session: Any, username: str) -> None:
         raise PermissionError(f"session {session.session_id} belongs to another user")
 
 
+def _artifact_base_url(config: Config, streamable_path: str) -> str:
+    """External ``.../artifacts`` base for artifact URLs handed to jobs.
+
+    Uses ``artifact_base_url`` when set, else derives it from the gateway WebSocket
+    URL (same host/scheme, same ``/mcp`` prefix Caddy already routes here). Empty when
+    neither is configured — the store cannot advertise a fetch URL, so it stays off.
+    """
+    if config.artifact_base_url:
+        return config.artifact_base_url.rstrip("/")
+    if not config.gateway_ws_url:
+        return ""
+    parsed = urlparse(config.gateway_ws_url)
+    scheme = "https" if parsed.scheme in ("wss", "https") else "http"
+    return f"{scheme}://{parsed.netloc}{streamable_path.rstrip('/')}/artifacts"
+
+
+def _presented_token(request: Any) -> str | None:
+    """Extract the bearer token from an artifact request's Authorization header.
+
+    LAVA's remote-artifact-token substitution replaces the header VALUE with the raw
+    secret, so the value is usually the token itself; humans/containers may prefix it
+    with ``Bearer``/``Token``. Accept both.
+    """
+    value = request.headers.get("authorization")
+    if not value:
+        return None
+    parts = value.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() in ("bearer", "token"):
+        return parts[1]
+    return value
+
+
+_TERMINAL_JOB_STATES = {"Finished", "Canceling", "Canceled"}
+
+
+def _register_artifact_routes(
+    mcp: FastMCP, config: Config, artifacts: ArtifactStore
+) -> None:
+    """Mount the artifact PUT (upload) / GET (fetch) routes on the MCP app.
+
+    Siblings of the gateway WebSocket route under ``/mcp/artifacts`` — Caddy already
+    routes ``/mcp*`` here, so uploads/downloads ride the same 443 path the dispatcher,
+    a device-connected container, or the DUT can reach. Access is by capability id +
+    bearer token; a bound job that has finished 410s and drops the artifact.
+    """
+    from starlette.responses import FileResponse, JSONResponse
+    from starlette.routing import Route
+
+    def _server_client() -> LavaClient | None:
+        # For best-effort job-binding checks only; works when the server is pinned to
+        # a LAVA instance with a token. Multi-tenant (no server creds) skips the check.
+        try:
+            return client_from(config, None)
+        except LavaError:
+            return None
+
+    def _authorized(request: Any) -> Any:
+        artifact_id = request.path_params["artifact_id"]
+        art = artifacts.get(artifact_id)
+        if art is None:
+            return None, JSONResponse({"error": "not found"}, status_code=404)
+        if not artifacts.verify_token(art, _presented_token(request)):
+            return None, JSONResponse({"error": "unauthorized"}, status_code=401)
+        return art, None
+
+    async def _put(request: Any) -> Any:
+        art, err = _authorized(request)
+        if err is not None:
+            return err
+        if art.state != "await_upload":
+            return JSONResponse({"error": "already uploaded"}, status_code=409)
+        length = request.headers.get("content-length")
+        try:
+            await artifacts.write_stream(
+                art, request.stream(), int(length) if length is not None else None
+            )
+        except ArtifactError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=413)
+        return JSONResponse(
+            {"stored": True, "artifact_id": art.artifact_id, "size": art.size_actual}
+        )
+
+    async def _get(request: Any) -> Any:
+        art, err = _authorized(request)
+        if err is not None:
+            return err
+        if art.state != "stored":
+            return JSONResponse({"error": "not uploaded yet"}, status_code=409)
+        if art.bind_job_id is not None:
+            sc = _server_client()
+            if sc is not None:
+                try:
+                    state = (sc.get_job(art.bind_job_id) or {}).get("state")
+                except LavaError:
+                    state = None
+                if state in _TERMINAL_JOB_STATES:
+                    artifacts.delete(art.artifact_id)
+                    return JSONResponse(
+                        {"error": "bound job finished"}, status_code=410
+                    )
+        return FileResponse(
+            artifacts.blob_path(art),
+            filename=art.filename,
+            media_type="application/octet-stream",
+        )
+
+    async def _endpoint(request: Any) -> Any:
+        return await (_put(request) if request.method == "PUT" else _get(request))
+
+    base = mcp.settings.streamable_http_path.rstrip("/") + "/artifacts"
+    for path in (
+        f"{base}/{{artifact_id}}",
+        f"{base}/{{artifact_id}}/{{filename:path}}",
+    ):
+        mcp._custom_starlette_routes.append(
+            Route(path, _endpoint, methods=["GET", "PUT"])
+        )
+
+
 def build_server(config: Config) -> FastMCP:
     """Create a FastMCP server exposing LAVA operations as tools.
 
@@ -545,6 +676,26 @@ def build_server(config: Config) -> FastMCP:
         )
         # exposed for tests/introspection; the tools capture `gateway` via closure
         mcp._lava_gateway = gateway  # type: ignore[attr-defined]
+
+    artifacts: ArtifactStore | None = None
+    if config.artifacts_enabled:
+        base_url = _artifact_base_url(config, mcp.settings.streamable_http_path)
+        if not base_url:
+            logger.warning(
+                "artifacts enabled but no base URL resolvable; set "
+                "LAVA_MCP_ARTIFACT_BASE_URL or LAVA_MCP_GATEWAY_WS_URL — store disabled"
+            )
+        else:
+            artifacts = ArtifactStore(
+                config.artifact_dir or None,
+                base_url=base_url,
+                ttl_default=config.artifact_ttl_default,
+                ttl_max=config.artifact_ttl_max,
+                max_bytes=config.artifact_max_bytes,
+                min_free_fraction=config.artifact_min_free_fraction,
+            )
+            _register_artifact_routes(mcp, config, artifacts)
+            mcp._lava_artifacts = artifacts  # type: ignore[attr-defined]
 
     def client() -> LavaClient:
         """Resolve the LAVA client for the current request (per-client creds)."""
@@ -1279,5 +1430,173 @@ def build_server(config: Config) -> FastMCP:
             session.revoke_human_keys()
             session.status = "closed"
             return {"closed": True, "session_id": session_id}
+
+    if artifacts is not None:
+
+        def _flush_pending_tokens(c: LavaClient, user: str) -> None:
+            """Delete this user's LAVA remote-artifact tokens whose artifact is gone.
+
+            The background reaper cannot act as a LAVA user, so it queues removals; we
+            flush the current caller's queue opportunistically on every artifact tool
+            call. Best-effort — a failed delete is retried on the next call.
+            """
+            for name in artifacts.take_pending_token_deletions(user):
+                try:
+                    c.delete_remote_artifact_token(name)
+                except LavaError:
+                    pass
+
+        if not config.read_only:
+
+            @mcp.tool()
+            def create_artifact_upload(
+                filename: str,
+                size_bytes: int,
+                ttl_seconds: int | None = None,
+                bind_job_id: int | None = None,
+            ) -> Any:
+                """Reserve a temporary upload slot for a build artifact LAVA can fetch.
+
+                For when you have a file (kernel, rootfs, DTB, script, ...) you want a
+                LAVA job to deploy/flash, or a board session / booted device to pull, but
+                nowhere to host it. The bytes do NOT go through this tool — it only mints
+                the slot; you then upload with the returned `put_command` (an HTTP PUT),
+                which keeps multi-GB files out of the model context. Pass `size_bytes`
+                (the file's real size) so the store can pre-check its per-artifact cap
+                and disk floor before you start pushing.
+
+                The artifact is fetchable at `get_url` for up to a few hours (`ttl_max`),
+                guarded by a temporary bearer token returned as `token`. That same token
+                is ALSO registered with LAVA as a per-user *remote artifact token* named
+                `lava-mcp-artifact-<id>`: when a deploy/test action's header value is a
+                token NAME you own, LAVA swaps in the secret at download time, so the
+                value never appears in the stored job definition or logs. The token (and
+                the artifact) are deleted on expiry, on delete_artifact, or when a bound
+                job finishes.
+
+                Three ways to consume it:
+                - LAVA deploy download (the dispatcher fetches + flashes it): paste
+                  `deploy_block` under the image/url in your deploy action — it uses the
+                  token NAME, keeping the secret out of the job (see `example_job_snippet`
+                  for exactly where it goes). ALSO set the job's top-level
+                  `visibility: personal` (see `visibility_note`).
+                - onto a BOOTED device that has working networking: run `fetch_command`
+                  (plain curl, token inline) from a test action that executes on the DUT
+                  — that lands the file on the device's own filesystem (e.g. push a test
+                  binary, config, or firmware to a running board). See `on_device_note`.
+                - inside a device-connected container (board session): run the same
+                  `fetch_command` in the container.
+                The inline-token cases expose the token to that context by necessity, so
+                rely on the short TTL.
+
+                Optionally pass `bind_job_id`: once that job finishes the artifact stops
+                serving. Delete early with delete_artifact; it auto-expires regardless.
+                """
+                user = require_user(config.http_allow_users)
+                c = client()
+                _flush_pending_tokens(c, user)
+                try:
+                    art, token = artifacts.create(
+                        filename,
+                        size_bytes,
+                        user,
+                        ttl_seconds=ttl_seconds,
+                        bind_job_id=bind_job_id,
+                    )
+                except ArtifactError as exc:
+                    return {"error": str(exc)}
+                # register the secret as a LAVA named token so the deploy block can
+                # reference the NAME (LAVA substitutes the value at download time).
+                token_name = f"lava-mcp-artifact-{art.artifact_id}"
+                lava_token_registered = False
+                try:
+                    c.add_remote_artifact_token(token_name, token)
+                    artifacts.set_lava_token_name(art.artifact_id, token_name)
+                    lava_token_registered = True
+                except LavaError as exc:
+                    logger.warning("artifact: LAVA token registration failed: %s", exc)
+                url = artifacts.get_url(art)
+                header_value = token_name if lava_token_registered else token
+                deploy_block = (
+                    f"url: {url}\n" f"headers:\n" f"  Authorization: {header_value}"
+                )
+                # a full deploy action showing exactly where deploy_block sits, so the
+                # agent does not have to guess the nesting (indent under images.<label>).
+                example_job_snippet = (
+                    "- deploy:\n"
+                    "    to: <your deploy method, from the template job>\n"
+                    "    images:\n"
+                    f"      {art.filename.split('.')[0] or 'image'}:\n"
+                    f"        url: {url}\n"
+                    "        headers:\n"
+                    f"          Authorization: {header_value}\n"
+                    "# ...keep the template's other deploy/boot params unchanged"
+                )
+                return {
+                    "artifact_id": art.artifact_id,
+                    "get_url": url,
+                    "expires": art.expires,
+                    "token": token,
+                    "remote_artifact_token": {
+                        "name": token_name if lava_token_registered else None,
+                        "registered": lava_token_registered,
+                        "how": (
+                            "This name is a LAVA remote artifact token holding the "
+                            "secret. Put the NAME as a header value in a deploy/test "
+                            "url action and LAVA substitutes the real token when the "
+                            "dispatcher downloads — the secret never enters the job."
+                        ),
+                    },
+                    "put_command": (
+                        f"curl -fsS -T <local-file> "
+                        f'-H "Authorization: {token}" {url}'
+                    ),
+                    "fetch_command": (
+                        f'curl -fsSL -H "Authorization: {token}" '
+                        f"-o {art.filename} {url}"
+                    ),
+                    "deploy_block": deploy_block,
+                    "example_job_snippet": example_job_snippet,
+                    "deploy_note": (
+                        "Paste deploy_block under the image/url you want LAVA to "
+                        "download (see example_job_snippet for placement). It "
+                        "references the token by NAME, so the secret stays out of the "
+                        "job."
+                        if lava_token_registered
+                        else "NOTE: could not register a LAVA named token, so "
+                        "deploy_block carries the raw token inline — set the job "
+                        "visibility to personal to limit exposure."
+                    ),
+                    "on_device_note": (
+                        "To land this file on a BOOTED device that has working "
+                        "networking, run fetch_command from a test action that executes "
+                        "on the DUT (e.g. an inline test running `curl`/`wget`). The "
+                        "device must be able to reach this server over HTTPS; the file "
+                        "is written to the device's own filesystem. Needs curl or wget "
+                        "on the target."
+                    ),
+                    "visibility_note": (
+                        "Set `visibility: personal` at the top of any job that "
+                        "references this artifact, so its URL is not publicly readable."
+                    ),
+                    "lava_token_registered": lava_token_registered,
+                }
+
+            @mcp.tool()
+            def delete_artifact(artifact_id: str) -> Any:
+                """Delete an uploaded artifact now and revoke its LAVA token."""
+                user = require_user(config.http_allow_users)
+                art = artifacts.delete(artifact_id, owner=user)
+                _flush_pending_tokens(client(), user)
+                if art is None:
+                    return {"deleted": False, "reason": "unknown artifact or not yours"}
+                return {"deleted": True, "artifact_id": artifact_id}
+
+        @mcp.tool()
+        def list_artifacts() -> Any:
+            """List your temporary artifacts (id, filename, size, state, expiry)."""
+            user = require_user(config.http_allow_users)
+            _flush_pending_tokens(client(), user)
+            return {"artifacts": [a.public_view() for a in artifacts.list_for(user)]}
 
     return mcp
