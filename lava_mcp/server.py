@@ -60,6 +60,16 @@ There are TWO different ways to get an interactive shell/console, for different 
    Tools: open_board_session -> run_in_session (run one command) or attach_shell
    (interactive ssh). Only devices tagged for remote access can host one.
 
+   open_board_session(console=true) ALSO gives you the board's serial console beside
+   the shell. Serial-console access — in ANY job, not just this one — is bridged by a
+   ser2net-proxy Test Services container: the container LAVA runs your test/session in
+   generally can't reach the lab's ser2net endpoint, so a sibling Test Services
+   container on the dispatcher network relays the UART out (it is the same proxy
+   open_console_session adds to a deploy+boot job). That is why console access needs a
+   device that allows Test Services. For console=true the server adds and wires the
+   proxy automatically; you just call attach_console(console_session_id). Only ser2net
+   (telnet) consoles can be proxied.
+
    The container is Debian and runs as root, so you can apt-get or build any tooling
    at runtime. E.g. build qdl from source and detect the attached board (in EDL mode
    it enumerates as vendor HS-USB QDLoader 05c6:9008):
@@ -802,10 +812,18 @@ def build_server(config: Config) -> FastMCP:
             Only devices tagged for remote access can host one.
 
             Set console=true to ALSO get the board's serial console alongside the
-            session (for bring-up: flash over USB while watching the UART). The same
-            job runs the ser2net-proxy; the result includes a console_session_id — call
+            session (for bring-up: flash over USB while watching the UART). The console
+            does NOT come from inside this container — your session container can't reach
+            the lab's ser2net endpoint. As for ANY job that wants the serial console
+            bridged out (e.g. open_console_session's deploy+boot job), the same
+            ser2net-proxy Test Services container runs beside the job on the dispatcher
+            network and relays the board's UART out over the gateway; that is why console
+            access needs a device that allows Test Services (check_serial_console_support).
+            For console=true the server adds and wires that proxy for you automatically.
+            The result includes a console_session_id — call
             attach_console(console_session_id) for the live console. Closing the board
-            session closes the console too. Needs a device that allows Test Services.
+            session closes the console too. Only ser2net (telnet) consoles are proxyable;
+            for any other lab console tooling the console_note says it is unavailable.
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
