@@ -62,7 +62,12 @@ it itself. And a file another job used is not automatically fetchable by you: wh
 downloaded it with an auth header (e.g. an Authorization/token header), the URL alone
 will not work — your job must fetch it the same way, through a LAVA deploy download
 carrying that same header, and if the header names a LAVA token, that token must be
-registered under your own user (LAVA only substitutes the submitter's own tokens).
+registered under your own user (LAVA only substitutes the submitter's own tokens). This
+holds even when the lab's cache (kisscache) already has the artifact: a cache hit still
+requires the auth header, and only LAVA can substitute the token — you cannot pull it
+yourself. So to use such an artifact, add a deploy `download` action (to: downloads)
+carrying the URL and its header to your job, before the step that consumes it, and let
+LAVA fetch it.
 
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
