@@ -114,6 +114,12 @@ def test_build_interactive_job_with_console_adds_proxy_but_no_ser2net_endpoint()
     services = job["actions"][0]["test"]
     assert services["namespace"] == "console"
     assert services["services"][0]["name"] == "ser2net-proxy"
+    # LAVA forbids the reserved 'common' namespace beside a named one, so the board
+    # action must also be namespaced (not left to default to 'common').
+    board = job["actions"][1]["test"]
+    assert board["namespace"] == "board"
+    namespaces = [a["test"].get("namespace") for a in job["actions"]]
+    assert "common" not in namespaces and None not in namespaces
     env = job["environment"]
     # the per-board endpoint is NOT baked in — it is pushed at runtime via SETPORT
     assert "SER2NET_HOST" not in env

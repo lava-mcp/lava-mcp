@@ -93,6 +93,12 @@ def build_interactive_job(
     }
 
     if console_session is not None and config.gateway_ws_url:
+        # LAVA forbids the reserved 'common' namespace (the default for an unnamespaced
+        # action) alongside any named namespace. The console proxy uses 'console', so
+        # the board action must be named too — otherwise the job fails validation with
+        # "'common' is a reserved namespace that should not be present with other
+        # namespaces". (A plain board session keeps the implicit 'common'.)
+        board_action["test"]["namespace"] = "board"
         # start the console proxy first, so it is watching from the start of the job
         actions.insert(
             0,
