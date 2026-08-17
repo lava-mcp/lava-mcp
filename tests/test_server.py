@@ -15,6 +15,7 @@ from lava_mcp.server import (
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
+    _require_test_services_device_type,
     _unproxyable_console_note,
     build_console_ready_action,
     build_console_services_action,
@@ -186,6 +187,47 @@ def test_require_test_services_device_raises_when_disabled() -> None:
         _require_test_services_device(_FakeServicesClient(allowed=False), "rb3g2-01")
 
 
+class _FakePerBoardServicesClient:
+    """Stub for the device_type pre-flight: list_devices yields the given hostnames
+    (insertion order = listing order) and allows_test_services is per host."""
+
+    def __init__(self, enabled_by_host: dict) -> None:
+        self._enabled = enabled_by_host
+        self.calls: list[dict] = []
+
+    def list_devices(
+        self, device_type: object = None, limit: int = 50, **filters: object
+    ) -> dict:
+        self.calls.append({"device_type": device_type, "limit": limit, **filters})
+        return {"results": [{"hostname": h} for h in self._enabled]}
+
+    def allows_test_services(self, hostname: str) -> bool:
+        return self._enabled[hostname]
+
+
+def test_require_test_services_device_type_passes_if_any_board_enabled() -> None:
+    # per-board setting: the first-listed board lacks it, a later one enables it —
+    # must NOT refuse (regression: previously it checked only the first board).
+    client = _FakePerBoardServicesClient({"qcs615-04": False, "qcs615-01": True})
+    _require_test_services_device_type(client, "qcs615-ride", "allow-remote-access")
+    # candidates are filtered by the remote-access tag the job pins to
+    assert client.calls[0]["device_type"] == "qcs615-ride"
+    assert client.calls[0]["tags__name"] == "allow-remote-access"
+
+
+def test_require_test_services_device_type_raises_when_none_enabled() -> None:
+    client = _FakePerBoardServicesClient({"qcs615-04": False, "qcs615-05": False})
+    with pytest.raises(PermissionError, match="allow_test_services"):
+        _require_test_services_device_type(client, "qcs615-ride", "allow-remote-access")
+
+
+def test_require_test_services_device_type_noop_when_none_readable() -> None:
+    # empty inventory -> best-effort skip, no refusal
+    _require_test_services_device_type(
+        _FakePerBoardServicesClient({}), "qcs615-ride", "allow-remote-access"
+    )
+
+
 def test_config_reads_split_user_allowlists(monkeypatch) -> None:
     monkeypatch.setenv("LAVA_MCP_HTTP_ALLOW_USERS", "alice, bob")
     monkeypatch.setenv("LAVA_MCP_SSH_ALLOW_USERS", "alice")
@@ -328,9 +370,7 @@ actions:
 
 
 def test_url_match_score_prefers_same_filename_and_path() -> None:
-    target = (
-        "https://h/x/meta-soc/28624135807-1/nodistro/qcs615-ride/img.rootfs.tar.gz"
-    )
+    target = "https://h/x/meta-soc/28624135807-1/nodistro/qcs615-ride/img.rootfs.tar.gz"
     same_img_new_build = (
         "https://h/x/meta-soc/99999999999-2/nodistro/qcs615-ride/img.rootfs.tar.gz"
     )

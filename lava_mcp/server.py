@@ -369,15 +369,26 @@ def _require_test_services_device(client: LavaClient, hostname: str) -> None:
         )
 
 
-def _require_test_services_device_type(client: LavaClient, device_type: str) -> None:
-    """Pre-flight for a device_type console: a representative device must allow Test
-    Services. We can't know which board LAVA will assign, but devices of a type share
-    this setting, so a representative check fails early with a clear message rather than
-    submitting a job LAVA rejects at validation. Skips the check if none is found."""
+def _require_test_services_device_type(
+    client: LavaClient, device_type: str, remote_access_tag: str = ""
+) -> None:
+    """Pre-flight for a device_type console: at least ONE schedulable board must allow
+    Test Services.
+
+    ``allow_test_services`` is per-board (like the ser2net console port), NOT uniform
+    across a device-type, so we must not refuse just because the first-listed board
+    lacks it — some boards of the type may enable it while others don't. We scan the
+    candidate boards (those carrying the remote-access tag the job pins to, since LAVA
+    only schedules the session onto one of those) and pass as soon as one enables it;
+    we refuse only when we could read at least one candidate and none did. The board
+    LAVA finally assigns is resolved at runtime. Best-effort: skips silently if the
+    inventory can't be read (or no candidate is readable)."""
+    filters = {"tags__name": remote_access_tag} if remote_access_tag else {}
     try:
-        page = client.list_devices(device_type=device_type, limit=5)
+        page = client.list_devices(device_type=device_type, limit=50, **filters)
     except Exception:  # noqa: BLE001 - pre-flight is best-effort
         return
+    checked = False
     for row in page.get("results", []) or []:
         host = row.get("hostname")
         if not host:
@@ -386,13 +397,19 @@ def _require_test_services_device_type(client: LavaClient, device_type: str) -> 
             allowed = client.allows_test_services(host)
         except Exception:  # noqa: BLE001 - skip a device we can't read
             continue
-        if not allowed:
-            raise PermissionError(
-                f"{device_type!r} devices do not enable 'allow_test_services' "
-                "(needed for the serial console) — open the board session without "
-                "console=true, or ask a lab admin to enable it."
-            )
-        return  # one representative device is enough
+        checked = True
+        if allowed:
+            return  # at least one candidate board enables Test Services
+    if checked:
+        raise PermissionError(
+            f"no {device_type!r} device (tagged for remote access) enables "
+            "'allow_test_services', which the serial console needs. The board-session "
+            "container cannot reach the lab's ser2net endpoint directly, so the console "
+            "is only available via the Test Services proxy (console=true) — there is no "
+            "manual workaround from inside the container. Open the board session "
+            "without console=true for host-side access, or ask a lab admin to enable "
+            "'allow_test_services' on a board of this type."
+        )
 
 
 def _discover_console_target(client: LavaClient, job_id: int | str | None) -> dict:
@@ -985,7 +1002,9 @@ def build_server(config: Config) -> FastMCP:
             await asyncio.to_thread(gateway.ensure_started)
             console_session = None
             if console:
-                _require_test_services_device_type(client(), device_type)
+                _require_test_services_device_type(
+                    client(), device_type, config.remote_access_tag
+                )
                 console_session = gateway.manager.create(
                     device_type=device_type, kind="console", owner=user
                 )
