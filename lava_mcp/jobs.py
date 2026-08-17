@@ -13,6 +13,7 @@ path are configurable so this stays decoupled from a specific deployment.
 from __future__ import annotations
 
 import base64
+import re
 from typing import Any
 
 import yaml
@@ -29,6 +30,7 @@ def build_interactive_job(
     image: str | None = None,
     timeout_minutes: int = 60,
     console_session: BoardSession | None = None,
+    downloads: list[dict[str, Any]] | None = None,
 ) -> str:
     """Return the YAML job definition for an interactive session on ``device_type``.
 
@@ -39,6 +41,12 @@ def build_interactive_job(
     LAVA_CONNECTION_COMMAND at runtime and the gateway pushes the endpoint to the proxy
     (see gateway.set_console_target). The proxy is writable from the start (no boot to
     gate on).
+
+    When ``downloads`` (a list of ``{"url", "headers"?}``) is given, a
+    ``deploy: to: downloads`` action fetches those artifacts first, so LAVA (which alone
+    can apply the auth header / substitute a remote-artifact token) stages them into the
+    board container at ``/lava-downloads`` — the container itself cannot fetch a
+    token-guarded artifact.
     """
     gateway_host = config.gateway_advertise_host or config.host
 
@@ -78,8 +86,6 @@ def build_interactive_job(
             ],
         }
     }
-    actions: list[dict[str, Any]] = [board_action]
-
     job: dict[str, Any] = {
         "device_type": device_type,
         "job_name": f"lava-mcp interactive {session.session_id}",
@@ -92,16 +98,21 @@ def build_interactive_job(
         "priority": "medium",
     }
 
-    if console_session is not None and config.gateway_ws_url:
-        # LAVA forbids the reserved 'common' namespace (the default for an unnamespaced
-        # action) alongside any named namespace. The console proxy uses 'console', so
-        # the board action must be named too — otherwise the job fails validation with
-        # "'common' is a reserved namespace that should not be present with other
-        # namespaces". (A plain board session keeps the implicit 'common'.)
+    console_present = console_session is not None and bool(config.gateway_ws_url)
+    # LAVA forbids the reserved 'common' namespace (an unnamespaced action's default)
+    # beside any named namespace. Whenever another namespaced action is added — the
+    # console proxy, or a downloads deploy — the board action must be named too,
+    # otherwise the job fails validation with "'common' is a reserved namespace that
+    # should not be present with other namespaces". A plain board session (no console,
+    # no downloads) keeps the implicit 'common'.
+    if console_present or downloads:
         board_action["test"]["namespace"] = "board"
-        # start the console proxy first, so it is watching from the start of the job
-        actions.insert(
-            0,
+
+    actions: list[dict[str, Any]] = []
+    if console_present:
+        assert console_session is not None  # implied by console_present; narrows type
+        # start the console proxy first, so it watches from the start of the job
+        actions.append(
             {
                 "test": {
                     "namespace": "console",
@@ -115,7 +126,7 @@ def build_interactive_job(
                         }
                     ],
                 }
-            },
+            }
         )
         key_b64 = base64.b64encode(console_session.private_key.encode()).decode()
         # LAVA writes this top-level environment into the proxy's compose .env. The
@@ -132,7 +143,55 @@ def build_interactive_job(
             "SESSION_PRIVATE_KEY_B64": key_b64,
         }
 
+    if downloads:
+        # Pre-stage artifacts LAVA fetches (applying the header / substituting a
+        # remote-artifact token — which the board container itself cannot do) into the
+        # container at /lava-downloads. Same 'board' namespace as the board action, so
+        # LAVA bind-mounts this namespace's downloads dir into the docker test action.
+        actions.append(build_downloads_action(downloads, "board", timeout_minutes))
+
+    actions.append(board_action)
+
     job["actions"] = actions
     if job_tags:
         job["tags"] = job_tags
     return yaml.safe_dump(job, sort_keys=False)
+
+
+def download_label(url: str, index: int = 0) -> str:
+    """A LAVA image key for a download: the URL's sanitized basename, else dl<index>."""
+    base = (url or "").rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0]
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", base).strip("_")
+    return stem or f"dl{index}"
+
+
+def build_downloads_action(
+    downloads: list[dict[str, Any]], namespace: str | None, timeout_minutes: int
+) -> dict[str, Any]:
+    """A LAVA ``deploy: to: downloads`` action that pre-fetches ``downloads`` artifacts.
+
+    Each item is ``{"url": ..., "headers": {...}?}``. LAVA downloads each URL applying
+    the headers (including substituting a remote-artifact token NAME for the submitter's
+    secret) and, for a docker test action sharing ``namespace``, bind-mounts the results
+    into that container at ``/lava-downloads``. That is the only way an interactive
+    container can obtain an artifact whose fetch needs a token it cannot itself supply.
+    """
+    images: dict[str, Any] = {}
+    for i, item in enumerate(downloads):
+        url = item["url"]
+        label = download_label(url, i)
+        while label in images:
+            label = f"{label}_{i}"
+        img: dict[str, Any] = {"url": url}
+        headers = item.get("headers")
+        if headers:
+            img["headers"] = headers
+        images[label] = img
+    deploy: dict[str, Any] = {
+        "to": "downloads",
+        "timeout": {"minutes": timeout_minutes},
+        "images": images,
+    }
+    if namespace:
+        deploy["namespace"] = namespace
+    return {"deploy": deploy}

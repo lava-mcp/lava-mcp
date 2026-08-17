@@ -25,7 +25,7 @@ from .artifacts import ArtifactError, ArtifactStore
 from .client import LavaClient, LavaError, client_from, ser2net_endpoint
 from .config import Config
 from .gateway import Gateway
-from .jobs import build_interactive_job
+from .jobs import build_downloads_action, build_interactive_job, download_label
 
 # The interactive gateway is WebSocket-only: the dial-out containers and human
 # clients reach it exclusively over wss://.../gateway-ssh (via websocat). Without an
@@ -154,7 +154,15 @@ it out of the job) — the tool hands back a deploy_block and a full example sni
 also returns a fetch_command (plain curl) you can run from a test action ON a booted
 device with working networking to land the file on the device itself. Artifacts
 auto-expire within hours; set the job's `visibility: personal` when it references one.
-(Only offered in hosted mode.)
+(Only offered in hosted mode.) For a BOARD SESSION, pass such artifacts as
+open_board_session(downloads=[{"url","headers"}]) (open_console_session takes downloads
+too): the server adds the LAVA download action so LAVA fetches them with your
+header/token and mounts them at /lava-downloads in the container — the container itself
+cannot substitute a token. To reuse a token your LAVA user already holds,
+list_remote_artifact_tokens returns your token NAMES (the secret values are never
+shown) so you can reference one by name in a header. When you DO download inside a
+container yourself and $HTTP_CACHE is set (a URL template containing %s), fetch through
+it — that is the lab's cache (kisscache) and it speeds up repeat/large downloads.
 
 Handing out an SSH key (attach_shell/attach_console): the returned private_key must
 be saved to a file with `chmod 600` — ssh refuses a key file with looser permissions.
@@ -578,6 +586,21 @@ def _presented_token(request: Any) -> str | None:
 _TERMINAL_JOB_STATES = {"Finished", "Canceling", "Canceled"}
 
 
+def _token_names_only(rows: Any) -> list[dict]:
+    """Reduce a LAVA remote-artifact-tokens listing to names only.
+
+    The REST endpoint returns each token as ``{"name", "token"}``; the token value is
+    secret, so we drop it and expose only the name (paginated or bare-list responses
+    both handled).
+    """
+    results = rows.get("results", rows) if isinstance(rows, dict) else rows
+    return [
+        {"name": r["name"]}
+        for r in (results or [])
+        if isinstance(r, dict) and r.get("name")
+    ]
+
+
 def _register_artifact_routes(
     mcp: FastMCP, config: Config, artifacts: ArtifactStore
 ) -> None:
@@ -769,6 +792,20 @@ def build_server(config: Config) -> FastMCP:
     def version() -> Any:
         """Return the version of the connected LAVA server."""
         return client().version()
+
+    @mcp.tool()
+    def list_remote_artifact_tokens() -> Any:
+        """List the NAMES of your LAVA remote artifact tokens (secret values hidden).
+
+        LAVA stores per-user named tokens that it substitutes into a deploy/test
+        action's header (by matching the header value to a token NAME you own) when it
+        downloads an artifact — so an authenticated download never carries the secret in
+        the job. Use this to discover which token names your user already has, then
+        reference one by name in a download/deploy `headers:` value (or in
+        open_board_session(downloads=...)). The token VALUES are secret and are never
+        returned — only their names (and any non-secret metadata).
+        """
+        return {"tokens": _token_names_only(client().list_remote_artifact_tokens())}
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()
@@ -991,6 +1028,7 @@ def build_server(config: Config) -> FastMCP:
             wait_seconds: int = 120,
             timeout_minutes: int = 60,
             console: bool = False,
+            downloads: list[dict] | None = None,
         ) -> Any:
             """Open a shell in a container running *next to* the board (not on it).
 
@@ -1015,6 +1053,15 @@ def build_server(config: Config) -> FastMCP:
             attach_console(console_session_id) for the live console. Closing the board
             session closes the console too. Only ser2net (telnet) consoles are proxyable;
             for any other lab console tooling the console_note says it is unavailable.
+
+            Pass `downloads` to pre-stage artifacts inside the session container: a list
+            of {"url", "headers"?} items. LAVA downloads each first (applying the header
+            — including substituting a remote-artifact token NAME for your secret, which
+            the container itself cannot do) and mounts them read-only at /lava-downloads
+            in the container. This is THE way to get a token-guarded artifact (e.g. one
+            from create_artifact_upload — pass its deploy_block url + headers) into a
+            board session; the container can't fetch it directly. Files land under
+            /lava-downloads by filename (the result lists the expected paths).
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -1042,6 +1089,7 @@ def build_server(config: Config) -> FastMCP:
                 image=image,
                 timeout_minutes=timeout_minutes,
                 console_session=console_session,
+                downloads=downloads,
             )
             result = client().submit_job(job_yaml)
             job_ids = result.get("job_ids") if isinstance(result, dict) else None
@@ -1057,6 +1105,21 @@ def build_server(config: Config) -> FastMCP:
                 view["console_session_id"] = console_session.session_id
                 view["console_note"] = await _wire_console(
                     client(), gateway, session, console_session, connected, wait_seconds
+                )
+            if downloads:
+                view["downloads_path"] = "/lava-downloads"
+                view["downloads"] = [
+                    {
+                        "url": d["url"],
+                        "expected_path": f"/lava-downloads/{download_label(d['url'])}",
+                    }
+                    for d in downloads
+                    if isinstance(d, dict) and d.get("url")
+                ]
+                view["downloads_note"] = (
+                    "LAVA fetches these before the container starts (applying your "
+                    "headers/token) and mounts them at /lava-downloads. `ls "
+                    "/lava-downloads` to confirm exact filenames."
                 )
             return view
 
@@ -1235,7 +1298,9 @@ def build_server(config: Config) -> FastMCP:
             }
 
         @mcp.tool()
-        async def open_console_session(device_type: str | None = None) -> Any:
+        async def open_console_session(
+            device_type: str | None = None, downloads: list[dict] | None = None
+        ) -> Any:
             """Reserve access to the board's own serial console (UART), for a LAVA job.
 
             Way 2 of 2 (see also open_board_session for a shell in a container beside
@@ -1261,6 +1326,14 @@ def build_server(config: Config) -> FastMCP:
             list of ``environment:`` values to set. Once the job boots and the proxy
             connects, call ``attach_console(session_id)``. Requires the device dict to
             allow Test Services (check_serial_console_support).
+
+            Pass `downloads` ({"url","headers"?} items) to also get a ready
+            `deploy: to: downloads` action in add_to_job — the same way a board session
+            pre-stages token-guarded artifacts, so LAVA (not you) fetches them with the
+            header/token. In this deploy+boot flow, prefer flashing an artifact via your
+            deploy action or fetching it on the booted board over its network; a
+            downloads action only surfaces files (at /lava-downloads) to a docker test
+            action that shares its namespace.
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -1282,55 +1355,68 @@ def build_server(config: Config) -> FastMCP:
                 "REVERSE_PORT": str(session.reverse_port),
                 "SESSION_PRIVATE_KEY_B64": key_b64,
             }
+            add_to_job: dict[str, Any] = {
+                "note": (
+                    "Everything to add to your deploy+boot LAVA job — no repo "
+                    "lookup or example needed. Two actions + the environment."
+                ),
+                "step_1_services_action": build_console_services_action(
+                    config.interactive_repo
+                ),
+                "step_1_note": (
+                    "Add this as the FIRST action (before deploy/boot) so the proxy "
+                    "watches the console from the start of the job."
+                ),
+                "step_2_environment": (
+                    "Put job_environment (above) into the job's top-level "
+                    "`environment:`, plus: "
+                    "SER2NET_NETWORK (docker network ser2net is on, usually "
+                    "'lava-dispatcher_default'); "
+                    "CONSOLE_READY_SENTINEL (must match the echo in step 3, e.g. "
+                    "LAVA_MCP_CONSOLE_WRITABLE). "
+                    "Do NOT set SER2NET_HOST/SER2NET_PORT: the console port is "
+                    "per-board and unknown until LAVA schedules the job, so the "
+                    "server discovers the assigned board's endpoint and pushes it "
+                    "to the proxy for you (see step 'then')."
+                ),
+                "step_3_console_ready_action": build_console_ready_action(),
+                "step_3_note": (
+                    "Add this as the LAST action (after deploy+boot reaches a "
+                    "shell). It echoes CONSOLE_READY_SENTINEL to unlock the "
+                    "read-only console, then hands you an interactive shell that "
+                    "holds the job open. Set its `timeout.minutes` to your job "
+                    "length and its `namespace`/`connection-namespace` to match "
+                    "your boot action. LAVA tolerates a silent console, so no "
+                    "keepalive is needed; end the session by exiting the shell."
+                ),
+                "then": (
+                    "Submit the job, then poll "
+                    "check_console_ready(job_id, session_id=session_id) until it "
+                    "returns ready:true (do NOT scrape logs yourself). Passing "
+                    "session_id lets the server wire the console proxy to the board "
+                    "LAVA assigned; if that board's console is not a proxyable "
+                    "ser2net telnet the reply's console_note says so (console "
+                    "unavailable — use a board session instead). Once ready, call "
+                    "attach_console(session_id) for a writable console."
+                ),
+            }
+            if downloads:
+                add_to_job["step_0_downloads_action"] = yaml.safe_dump(
+                    [build_downloads_action(downloads, None, timeout_minutes=10)],
+                    sort_keys=False,
+                )
+                add_to_job["step_0_note"] = (
+                    "Optional: this deploy action fetches token-guarded artifacts via "
+                    "LAVA (applying your headers / substituting the token). Set its "
+                    "`namespace` to match the docker test action that reads them at "
+                    "/lava-downloads, and adjust `timeout`. To flash an artifact, put it "
+                    "in your deploy/boot action instead."
+                )
             return {
                 "session_id": session.session_id,
                 "reverse_port": session.reverse_port,
                 "job_environment": job_environment,
-                "add_to_job": {
-                    "note": (
-                        "Everything to add to your deploy+boot LAVA job — no repo "
-                        "lookup or example needed. Two actions + the environment."
-                    ),
-                    "step_1_services_action": build_console_services_action(
-                        config.interactive_repo
-                    ),
-                    "step_1_note": (
-                        "Add this as the FIRST action (before deploy/boot) so the proxy "
-                        "watches the console from the start of the job."
-                    ),
-                    "step_2_environment": (
-                        "Put job_environment (above) into the job's top-level "
-                        "`environment:`, plus: "
-                        "SER2NET_NETWORK (docker network ser2net is on, usually "
-                        "'lava-dispatcher_default'); "
-                        "CONSOLE_READY_SENTINEL (must match the echo in step 3, e.g. "
-                        "LAVA_MCP_CONSOLE_WRITABLE). "
-                        "Do NOT set SER2NET_HOST/SER2NET_PORT: the console port is "
-                        "per-board and unknown until LAVA schedules the job, so the "
-                        "server discovers the assigned board's endpoint and pushes it "
-                        "to the proxy for you (see step 'then')."
-                    ),
-                    "step_3_console_ready_action": build_console_ready_action(),
-                    "step_3_note": (
-                        "Add this as the LAST action (after deploy+boot reaches a "
-                        "shell). It echoes CONSOLE_READY_SENTINEL to unlock the "
-                        "read-only console, then hands you an interactive shell that "
-                        "holds the job open. Set its `timeout.minutes` to your job "
-                        "length and its `namespace`/`connection-namespace` to match "
-                        "your boot action. LAVA tolerates a silent console, so no "
-                        "keepalive is needed; end the session by exiting the shell."
-                    ),
-                    "then": (
-                        "Submit the job, then poll "
-                        "check_console_ready(job_id, session_id=session_id) until it "
-                        "returns ready:true (do NOT scrape logs yourself). Passing "
-                        "session_id lets the server wire the console proxy to the board "
-                        "LAVA assigned; if that board's console is not a proxyable "
-                        "ser2net telnet the reply's console_note says so (console "
-                        "unavailable — use a board session instead). Once ready, call "
-                        "attach_console(session_id) for a writable console."
-                    ),
-                },
+                "add_to_job": add_to_job,
             }
 
         @mcp.tool()

@@ -24,7 +24,11 @@ from lava_mcp.gateway import (
     ip_allowed,
     parse_networks,
 )
-from lava_mcp.jobs import build_interactive_job
+from lava_mcp.jobs import (
+    build_downloads_action,
+    build_interactive_job,
+    download_label,
+)
 from lava_mcp.server import build_server
 
 _HAS_WS_CLIENT = bool(shutil.which("websocat") and shutil.which("ssh"))
@@ -131,6 +135,78 @@ def test_build_interactive_job_with_console_adds_proxy_but_no_ser2net_endpoint()
     assert env["REVERSE_PORT"] == str(console.reverse_port)
     assert env["GATEWAY_WS_URL"] == "wss://gw.example.com/gateway-ssh"
     assert "SESSION_PRIVATE_KEY_B64" in env
+
+
+def test_download_label_and_action() -> None:
+    assert download_label("https://h/x/boot.img.gz") == "boot.img.gz"
+    assert download_label("https://h/x/f.bin?sig=abc") == "f.bin"
+    assert download_label("https://h/weird name!.bin", 2) == "weird_name_.bin"
+    assert download_label("https://h/dir/", 3) == "dir"  # trailing slash stripped
+    assert download_label("https://h/@@@", 4) == "dl4"  # empty after sanitizing
+    action = build_downloads_action(
+        [
+            {"url": "https://h/a/boot.img.gz", "headers": {"Authorization": "tok-a"}},
+            {"url": "https://h/b/rootfs.tar"},
+        ],
+        namespace="board",
+        timeout_minutes=15,
+    )
+    dep = action["deploy"]
+    assert dep["to"] == "downloads" and dep["namespace"] == "board"
+    imgs = dep["images"]
+    assert imgs["boot.img.gz"] == {
+        "url": "https://h/a/boot.img.gz",
+        "headers": {"Authorization": "tok-a"},
+    }
+    # no headers -> no headers key
+    assert imgs["rootfs.tar"] == {"url": "https://h/b/rootfs.tar"}
+
+
+def test_build_interactive_job_with_downloads_stages_via_deploy_namespace() -> None:
+    cfg = Config(url="https://lava.example.com")
+    session = SessionManager().create(device_type="qcs6490")
+    job = yaml.safe_load(
+        build_interactive_job(
+            cfg,
+            session,
+            device_type="qcs6490",
+            downloads=[{"url": "https://h/a/k.img", "headers": {"X-Tok": "n"}}],
+        )
+    )
+    # a downloads deploy runs before the board test action, both in 'board' namespace
+    assert job["actions"][0]["deploy"]["to"] == "downloads"
+    assert job["actions"][0]["deploy"]["namespace"] == "board"
+    assert job["actions"][0]["deploy"]["images"]["k.img"]["headers"] == {"X-Tok": "n"}
+    assert job["actions"][1]["test"]["namespace"] == "board"
+    # no reserved 'common' left beside the named namespaces
+    kinds = [next(iter(a)) for a in job["actions"]]
+    assert kinds == ["deploy", "test"]
+    namespaces = [a[k].get("namespace") for a, k in zip(job["actions"], kinds)]
+    assert "common" not in namespaces and None not in namespaces
+
+
+def test_build_interactive_job_console_and_downloads_order_and_namespaces() -> None:
+    cfg = Config(
+        url="https://lava.example.com",
+        gateway_advertise_host="gw.example.com",
+        gateway_ws_url="wss://gw.example.com/gateway-ssh",
+    )
+    mgr = SessionManager()
+    session = mgr.create(device_type="qcs6490")
+    console = mgr.create(device_type="qcs6490", kind="console")
+    job = yaml.safe_load(
+        build_interactive_job(
+            cfg,
+            session,
+            device_type="qcs6490",
+            console_session=console,
+            downloads=[{"url": "https://h/a/k.img"}],
+        )
+    )
+    # order: console proxy, downloads, board — namespaces console / board / board
+    assert job["actions"][0]["test"]["namespace"] == "console"
+    assert job["actions"][1]["deploy"]["namespace"] == "board"
+    assert job["actions"][2]["test"]["namespace"] == "board"
 
 
 def test_set_console_target_stores_target_when_not_connected() -> None:

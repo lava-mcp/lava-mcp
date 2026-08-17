@@ -16,6 +16,7 @@ from lava_mcp.server import (
     _require_remote_access_device,
     _require_test_services_device,
     _require_test_services_device_type,
+    _token_names_only,
     _unproxyable_console_note,
     build_console_ready_action,
     build_console_services_action,
@@ -132,9 +133,23 @@ def tool_names(read_only: bool) -> set[str]:
     return {t.name for t in tools}
 
 
+def test_token_names_only_hides_secret_values() -> None:
+    # bare list and paginated shapes, both stripped to names (no 'token' value leaks)
+    rows = [{"name": "a", "token": "SECRET1"}, {"name": "b", "token": "SECRET2"}]
+    assert _token_names_only(rows) == [{"name": "a"}, {"name": "b"}]
+    assert _token_names_only({"results": rows}) == [{"name": "a"}, {"name": "b"}]
+    out = _token_names_only(rows)
+    assert all("token" not in t for t in out)
+    # junk / missing names are dropped, empty input is fine
+    assert _token_names_only([{"token": "x"}, "bad", {"name": "c"}]) == [{"name": "c"}]
+    assert _token_names_only(None) == []
+
+
 def test_read_tools_always_present() -> None:
     names = tool_names(read_only=False)
     assert {"list_devices", "get_job", "get_queue", "get_job_results"} <= names
+    # token-name listing is a general read tool, always available
+    assert "list_remote_artifact_tokens" in names
 
 
 def test_write_tools_present_when_not_read_only() -> None:
