@@ -49,6 +49,17 @@ This server proxies one LAVA instance: query devices/jobs, submit and manage tes
 jobs, and open interactive sessions to a board. General LAVA tools grant exactly what
 your own LAVA token grants.
 
+The lab is shared and jobs are independent — do NOT assume continuity across jobs. The
+scheduler picks a free board per job, so the board you land on is not yours to keep:
+the job that ran on it before (or runs next) is very likely someone else's, and a board
+you just used is not necessarily the one you get next time. Nothing persists on a board
+between jobs — a flashed image, files, or leftover state from one job must not be relied
+on by another; re-establish what you need within your own job. Likewise, artifacts a job
+downloads (deploy URLs — including from the artifact store — and test-definition repos)
+are fetched into that job's own workspace on the worker and deleted when it ends; they
+are NOT shared with or reused by other jobs, so every job that needs a file must fetch
+it itself.
+
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
 1. Board session — a shell in a container running *next to* the board (on the
