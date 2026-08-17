@@ -67,7 +67,10 @@ holds even when the lab's cache (kisscache) already has the artifact: a cache hi
 requires the auth header, and only LAVA can substitute the token — you cannot pull it
 yourself. So to use such an artifact, add a deploy `download` action (to: downloads)
 carrying the URL and its header to your job, before the step that consumes it, and let
-LAVA fetch it.
+LAVA fetch it. Within the SAME job this is all you need: a file an earlier action
+downloads stays in that job's workspace and IS available to later actions — including a
+docker test container running later in the job — so download it once up front, then use
+it. (What does not carry over is between separate jobs.)
 
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
