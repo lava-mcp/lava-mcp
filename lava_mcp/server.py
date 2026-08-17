@@ -58,7 +58,11 @@ on by another; re-establish what you need within your own job. Likewise, artifac
 downloads (deploy URLs — including from the artifact store — and test-definition repos)
 are fetched into that job's own workspace on the worker and deleted when it ends; they
 are NOT shared with or reused by other jobs, so every job that needs a file must fetch
-it itself.
+it itself. And a file another job used is not automatically fetchable by you: when LAVA
+downloaded it with an auth header (e.g. an Authorization/token header), the URL alone
+will not work — your job must fetch it the same way, through a LAVA deploy download
+carrying that same header, and if the header names a LAVA token, that token must be
+registered under your own user (LAVA only substitutes the submitter's own tokens).
 
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
