@@ -599,7 +599,12 @@ def _docs_preamble(config: Config) -> str:
         "REQUIRED READING — before using these tools, read LAVA's technical reference "
         f"at {base}{_ARCH_DOCS_PATH} (and the pages it links) to understand LAVA's "
         "architecture: jobs, device-types, the deploy/boot/test pipeline, namespaces, "
-        "and results. Do not guess at LAVA behaviour you can confirm there."
+        "and results. Do not guess at LAVA behaviour you can confirm there.",
+        "STRONGLY SUGGESTED before you submit any job that deploys: for each deploy "
+        "method it uses, read that method's technical reference — or, if the docs don't "
+        "cover it, check the deployed LAVA source (below, when declared). If neither is "
+        "available, proceed. It's not enforced, but confirm rather than guess: deploy "
+        "parameters differ per method and a wrong job wastes a board's time.",
     ]
     if config.lava_source_repo:
         ref = config.lava_source_ref or "the deployed release"
@@ -1029,7 +1034,15 @@ def build_server(config: Config) -> FastMCP:
 
         @mcp.tool()
         def submit_job(definition: str) -> Any:
-            """Submit a YAML job definition. Returns the new job id(s)."""
+            """Submit a YAML job definition. Returns the new job id(s).
+
+            STRONGLY SUGGESTED before submitting a job that deploys: for each
+            `deploy: to:` method it uses, read that method's LAVA technical reference —
+            or, if the docs don't cover it, check the deployed LAVA source
+            (LAVA_SOURCE_REPO/REF, when the deployment declares it). If neither is
+            available, go ahead. This is not enforced, but a board's time is scarce and
+            deploy parameters differ per method, so confirm rather than guess.
+            """
             return client().submit_job(definition)
 
         @mcp.tool()
