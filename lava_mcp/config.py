@@ -37,6 +37,11 @@ class Config:
     api_version: str = "v0.3"
     read_only: bool = False
     timeout: float = 30.0
+    # where the deployed LAVA's source lives, so an agent can read the exact code
+    # running behind this instance when the docs don't answer a question. Set both to
+    # the git repo URL and the ref (tag/branch/commit) the deployment was built from.
+    lava_source_repo: str = ""
+    lava_source_ref: str = ""
     # serving (hostable mode)
     transport: str = "stdio"  # "stdio" | "streamable-http"
     host: str = "127.0.0.1"
@@ -107,6 +112,8 @@ class Config:
             url=url,
             token=os.environ.get("LAVA_TOKEN"),
             api_version=os.environ.get("LAVA_API_VERSION", "v0.3"),
+            lava_source_repo=os.environ.get("LAVA_SOURCE_REPO", ""),
+            lava_source_ref=os.environ.get("LAVA_SOURCE_REF", ""),
             read_only=_env_bool("LAVA_MCP_READ_ONLY"),
             timeout=float(os.environ.get("LAVA_MCP_TIMEOUT", "30")),
             transport=os.environ.get("LAVA_MCP_TRANSPORT", "stdio"),

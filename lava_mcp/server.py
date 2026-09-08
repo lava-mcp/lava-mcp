@@ -591,14 +591,24 @@ _ARCH_DOCS_PATH = "/static/docs/technical-references/architecture.html"
 def _docs_preamble(config: Config) -> str:
     """A required-reading pointer to the LAVA technical reference, prepended to the
     server instructions. Uses the pinned instance URL when set, else a placeholder the
-    agent fills from its own LAVA URL (whoami/version report the instance)."""
+    agent fills from its own LAVA URL (whoami/version report the instance). When the
+    deployment declares where its LAVA source lives, also point the agent at that repo
+    and ref so it can read the exact deployed code."""
     base = config.url.rstrip("/") if config.url else "<your LAVA URL>"
-    return (
+    lines = [
         "REQUIRED READING — before using these tools, read LAVA's technical reference "
         f"at {base}{_ARCH_DOCS_PATH} (and the pages it links) to understand LAVA's "
         "architecture: jobs, device-types, the deploy/boot/test pipeline, namespaces, "
-        "and results. Do not guess at LAVA behaviour you can confirm there.\n\n"
-    )
+        "and results. Do not guess at LAVA behaviour you can confirm there."
+    ]
+    if config.lava_source_repo:
+        ref = config.lava_source_ref or "the deployed release"
+        lines.append(
+            "The LAVA running behind this instance is built from "
+            f"{config.lava_source_repo} at ref {ref} — read that source for exact "
+            "behaviour the docs don't cover."
+        )
+    return "\n\n".join(lines) + "\n\n"
 
 
 def _token_names_only(rows: Any) -> list[dict]:

@@ -96,6 +96,17 @@ def test_docs_preamble_points_at_the_technical_reference() -> None:
     assert f"https://lava.example.com{arch}" in pre
     # multi-tenant (no pinned URL) -> placeholder the agent fills in
     assert f"<your LAVA URL>{arch}" in _docs_preamble(Config(url=""))
+    # no source repo configured -> no source pointer
+    assert "built from" not in pre
+    # when the deployment declares its LAVA source, point the agent at repo + ref
+    with_src = _docs_preamble(
+        Config(
+            url="https://lava.example.com",
+            lava_source_repo="https://gitlab.com/lava/lava.git",
+            lava_source_ref="2026.07",
+        )
+    )
+    assert "https://gitlab.com/lava/lava.git" in with_src and "2026.07" in with_src
     # it is actually prepended to the served instructions
     server = build_server(Config(url="https://lava.example.com"))
     assert server.instructions.startswith("REQUIRED READING")
