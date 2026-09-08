@@ -126,7 +126,12 @@ kinds, for different needs:
    exposed to the container. Reach for it when you need to control *how* the board is
    driven from the host rather than the fixed deploy LAVA would run — e.g. trying
    different flashing software or versions, custom fastboot/qdl/adb sequences, or
-   deeper hands-on debugging over USB (a board that won't boot, recovery mode).
+   deeper hands-on debugging over USB (a board that won't boot, recovery mode). The
+   sweet spot is an ITERATIVE loop on one held board — e.g. bisecting a regression —
+   where you repeatedly flash and/or boot changing artifacts from the container and
+   inspect the result, without re-queuing (and re-waiting for) a fresh job each round.
+   For a single fixed run, prefer a normal deploy/boot/test job: LAVA is good at
+   driving the board itself (power, flash, boot) and you avoid tying up a board.
    Tools: open_board_session -> run_in_session (run one command) or attach_shell
    (interactive ssh). Only devices tagged for remote access can host one.
 
