@@ -78,6 +78,16 @@ downloads stays in that job's workspace and IS available to later actions — in
 docker test container running later in the job — so download it once up front, then use
 it. (What does not carry over is between separate jobs.)
 
+LAVA can also MODIFY a downloaded file server-side, so you can transform files you
+cannot even fetch locally (no auth/token, or private network): add a
+`postprocess: {docker: {image: ..., steps: [...]}}` to a `deploy: to: downloads`
+action. LAVA runs those shell steps in that docker image with the downloaded files at
+/lava-downloads (the working directory) — decompress, patch, repack, sign, inject a
+config, etc. — and the modified files are then used by later actions in the job. So the
+pattern "LAVA fetches (with a token you hold) -> LAVA modifies in a container -> the job
+uses the result" needs nothing on your machine. ($HTTP_CACHE is exported into the
+postprocess env too.)
+
 There are TWO different ways to get an interactive shell/console, for different jobs:
 
 1. Board session — a shell in a container running *next to* the board (on the
