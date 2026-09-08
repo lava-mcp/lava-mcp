@@ -585,6 +585,21 @@ def _presented_token(request: Any) -> str | None:
 
 _TERMINAL_JOB_STATES = {"Finished", "Canceling", "Canceled"}
 
+_ARCH_DOCS_PATH = "/static/docs/technical-references/architecture.html"
+
+
+def _docs_preamble(config: Config) -> str:
+    """A required-reading pointer to the LAVA technical reference, prepended to the
+    server instructions. Uses the pinned instance URL when set, else a placeholder the
+    agent fills from its own LAVA URL (whoami/version report the instance)."""
+    base = config.url.rstrip("/") if config.url else "<your LAVA URL>"
+    return (
+        "REQUIRED READING — before using these tools, read LAVA's technical reference "
+        f"at {base}{_ARCH_DOCS_PATH} (and the pages it links) to understand LAVA's "
+        "architecture: jobs, device-types, the deploy/boot/test pipeline, namespaces, "
+        "and results. Do not guess at LAVA behaviour you can confirm there.\n\n"
+    )
+
 
 def _token_names_only(rows: Any) -> list[dict]:
     """Reduce a LAVA remote-artifact-tokens listing to names only.
@@ -712,7 +727,7 @@ def build_server(config: Config) -> FastMCP:
     # the process.
     mcp = FastMCP(
         "lava",
-        instructions=_SERVER_INSTRUCTIONS,
+        instructions=_docs_preamble(config) + _SERVER_INSTRUCTIONS,
         host=config.host,
         port=config.port,
         json_response=config.json_response,

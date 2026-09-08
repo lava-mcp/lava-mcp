@@ -9,6 +9,7 @@ from lava_mcp.server import (
     _WS_NOT_CONFIGURED,
     _artifact_base_url,
     _discover_console_target,
+    _docs_preamble,
     _enforce_user_allowlist,
     _lava_username,
     _presented_token,
@@ -85,6 +86,20 @@ def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
     assert _presented_token(_FakeReq({"authorization": "Bearer s3cret"})) == "s3cret"
     assert _presented_token(_FakeReq({"authorization": "token s3cret"})) == "s3cret"
     assert _presented_token(_FakeReq({})) is None
+
+
+def test_docs_preamble_points_at_the_technical_reference() -> None:
+    arch = "/static/docs/technical-references/architecture.html"
+    # pinned instance -> concrete URL
+    pre = _docs_preamble(Config(url="https://lava.example.com/"))
+    assert "REQUIRED READING" in pre
+    assert f"https://lava.example.com{arch}" in pre
+    # multi-tenant (no pinned URL) -> placeholder the agent fills in
+    assert f"<your LAVA URL>{arch}" in _docs_preamble(Config(url=""))
+    # it is actually prepended to the served instructions
+    server = build_server(Config(url="https://lava.example.com"))
+    assert server.instructions.startswith("REQUIRED READING")
+    assert arch in server.instructions
 
 
 def test_artifact_base_url_prefers_explicit_then_derives_from_ws() -> None:
