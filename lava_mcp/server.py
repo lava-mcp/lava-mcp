@@ -52,7 +52,13 @@ your own LAVA token grants.
 The lab is shared and jobs are independent — do NOT assume continuity across jobs. The
 scheduler picks a free board per job, so the board you land on is not yours to keep:
 the job that ran on it before (or runs next) is very likely someone else's, and a board
-you just used is not necessarily the one you get next time. Nothing persists on a board
+you just used is not necessarily the one you get next time. CRITICAL: jobs are NOT
+guaranteed to run concurrently, nor one-after-another, nor on the same board — each
+queues independently for a free device, may wait an arbitrary time, and other users'
+jobs interleave. You therefore CANNOT carry device status between jobs: power state,
+boot/bootloader state, flashed contents, uptime, plugged peripherals, or anything you
+left on a board in one job must NEVER be assumed present in another. If several steps
+depend on a board's state, they MUST be in a SINGLE job. Nothing persists on a board
 between jobs — a flashed image, files, or leftover state from one job must not be relied
 on by another; re-establish what you need within your own job. Likewise, artifacts a job
 downloads (deploy URLs — including from the artifact store — and test-definition repos)
