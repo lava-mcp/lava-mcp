@@ -57,14 +57,18 @@ logs and results once it runs. The great majority of LAVA use is exactly this
 deploy/boot/test shape; the interactive sessions described later are a smaller,
 special-case feature — do not assume a task needs them.
 
-Building a job: do NOT hand-author deploy/boot from scratch — flash method,
-storage/media, partitioning/rawprogram and artifact auth are image- and
-device-specific. Adapt a previous SUCCESSFUL job whose deploy `url` matches the
-artifacts you want: call find_boot_template(artifact_url, device_type) (or list_jobs +
-get_job_definition) to get one, keep its deploy+boot actions, swap in your URL, and KEEP
-its artifact authentication (Authorization/token headers). Do NOT copy an unrelated job
-(e.g. a health-check). Read the technical reference for each deploy method you use (see
-the required-reading note above), then validate_job before submitting.
+Building a job: deploy/boot parameters — flash method, storage/media,
+partitioning/rawprogram and artifact auth — are image- and device-specific and easy to
+get wrong, so do your homework first. The EASIEST path is to adapt a previous SUCCESSFUL
+job whose deploy `url` matches the artifacts you want: find_boot_template(artifact_url,
+device_type) (or list_jobs + get_job_definition) returns one; keep its deploy+boot
+actions, swap in your URL, and KEEP its artifact authentication (Authorization/token
+headers), and don't base it on an unrelated job (e.g. a health-check). You CAN instead
+craft a job yourself — that's fine — but before you do, study several recent jobs on
+that device_type (get_job_definition) AND read the LAVA documentation (the technical
+reference for the deploy/boot methods you will use); do not guess blind. Either way,
+read the reference for each deploy method you use (see the required-reading note above),
+then validate_job before submitting.
 
 Job lifecycle tools: validate_job (check without submitting) -> submit_job (returns the
 job id) -> poll get_job for state and health, and read get_job_logs / get_job_results;
@@ -1379,16 +1383,13 @@ def build_server(config: Config) -> FastMCP:
             networking. Unlike a board session, this path relies on a LAVA job that
             DEPLOYS and BOOTS an image; this call only reserves the console bridge.
 
-            You supply the deploy+boot job. Do NOT hand-author the boot flow — adapt an
-            existing job. ALWAYS base it on a previous successful job whose deploy `url`
-            closely matches the artifacts you want to boot: deploy+boot params (flash
-            method, rawprogram/patch, storage, auth headers) are image-specific, so only
-            a job that flashed a similar URL is a safe template. Call
-            find_boot_template(artifact_url, device_type) to search this instance for
-            the best URL match. Do NOT use an unrelated job such as a health-check.
-            Keep that job's deploy+boot actions —
-            swap in your URL but KEEP its artifact authentication (HTTP headers such as
-            Authorization, and any credentials) so the fetch succeeds — and add the
+            You supply the deploy+boot job — build it as in the standard workflow: the
+            easiest path is to adapt a previous successful job whose deploy `url`
+            matches the artifacts you want (find_boot_template(artifact_url,
+            device_type), or list_jobs + get_job_definition), keeping its deploy+boot
+            actions and artifact auth (Authorization/token headers) and swapping in your
+            URL. You may craft the job yourself instead, but first study recent jobs on
+            the device_type and the LAVA docs for the deploy/boot methods. Then add the
             console proxy on top.
 
             You do NOT need to find an example in any repo: this call returns, in
