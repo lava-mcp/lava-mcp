@@ -14,6 +14,10 @@ services:
       # Pin this server to one LAVA instance; clients then only send X-Lava-Token.
       # Leave LAVA_URL empty in .env to be multi-tenant (clients send X-Lava-Url too).
       LAVA_URL: ${LAVA_URL:-}
+      # Where the deployed LAVA's source lives, surfaced to agents so they can read the
+      # exact code running behind this instance (git repo URL + ref it was built from).
+      LAVA_SOURCE_REPO: ${LAVA_SOURCE_REPO:-}
+      LAVA_SOURCE_REF: ${LAVA_SOURCE_REF:-}
       LAVA_MCP_TRANSPORT: streamable-http
       LAVA_MCP_HOST: 0.0.0.0
       LAVA_MCP_PORT: "8000"
