@@ -49,6 +49,29 @@ This server proxies one LAVA instance: query devices/jobs, submit and manage tes
 jobs, and open interactive sessions to a board. General LAVA tools grant exactly what
 your own LAVA token grants.
 
+THE STANDARD WAY TO USE LAVA — reach for this first — is a non-interactive job: a YAML
+definition with an `actions:` list that DEPLOYS an image to the board (fetch/flash),
+BOOTS it, then runs one or more TEST definitions that record pass/fail results. You
+submit it, it queues for a free board of the requested `device_type`, and you read its
+logs and results once it runs. The great majority of LAVA use is exactly this
+deploy/boot/test shape; the interactive sessions described later are a smaller,
+special-case feature — do not assume a task needs them.
+
+Building a job: do NOT hand-author deploy/boot from scratch — flash method,
+storage/media, partitioning/rawprogram and artifact auth are image- and
+device-specific. Adapt a previous SUCCESSFUL job whose deploy `url` matches the
+artifacts you want: call find_boot_template(artifact_url, device_type) (or list_jobs +
+get_job_definition) to get one, keep its deploy+boot actions, swap in your URL, and KEEP
+its artifact authentication (Authorization/token headers). Do NOT copy an unrelated job
+(e.g. a health-check). Read the technical reference for each deploy method you use (see
+the required-reading note above), then validate_job before submitting.
+
+Job lifecycle tools: validate_job (check without submitting) -> submit_job (returns the
+job id) -> poll get_job for state and health, and read get_job_logs / get_job_results;
+cancel_job stops a queued or running job; list_jobs / get_job / get_job_definition
+inspect earlier jobs (also your templates). A finished job's health is Complete (all
+passed) or Incomplete (something failed).
+
 The lab is shared and jobs are independent — do NOT assume continuity across jobs. The
 scheduler picks a free board per job, so the board you land on is not yours to keep:
 the job that ran on it before (or runs next) is very likely someone else's, and a board
@@ -88,7 +111,10 @@ pattern "LAVA fetches (with a token you hold) -> LAVA modifies in a container ->
 uses the result" needs nothing on your machine. ($HTTP_CACHE is exported into the
 postprocess env too.)
 
-There are TWO different ways to get an interactive shell/console, for different jobs:
+Beyond that standard flow, for hands-on work that a batch job can't express you can
+open an INTERACTIVE session. This is the exception, not the default — prefer a normal
+deploy/boot/test job unless you specifically need live, manual control. There are two
+kinds, for different needs:
 
 1. Board session — a shell in a container running *next to* the board (on the
    worker), NOT a shell on the board itself. Use it for host-side work against the
@@ -143,23 +169,13 @@ There are TWO different ways to get an interactive shell/console, for different 
    BOOT an image first; the server then adds a test action that bridges the console
    out. Tools: check_serial_console_support -> open_console_session -> attach_console.
 
-   Writing a correct deploy+boot LAVA job from scratch is hard. Do NOT hand-author
-   the boot flow — adapt an existing job. ALWAYS base it on a previous successful job
-   whose deploy `url` closely matches the artifacts you want to boot: deploy+boot
-   parameters (flash method, rawprogram/patch, storage, auth headers) are
-   image-specific, so ONLY a job that flashed a similar URL is a safe template. Call
-   find_boot_template(artifact_url, device_type) — it searches this instance's recent
-   successful jobs and returns the best URL-matched ones with their full definition
-   (or do it by hand with list_jobs + get_job_definition). Do NOT use an unrelated job
-   (e.g. a health-check, or a job for a different image) as the template — it will have
-   incompatible deploy settings. Keep the matching job's deploy+boot actions — swap in
-   your URL but KEEP its artifact authentication (HTTP headers such as Authorization,
-   and any token/credentials) so the fetch succeeds — and add the console proxy on
-   top. You do NOT need an example anywhere:
-   open_console_session returns (in its `add_to_job` field) the exact `services` test
-   action to paste in as the first action, plus the `environment:` values to set.
-   After submitting, poll check_console_ready(job_id) until ready:true (instead of
-   reading logs), then call attach_console.
+   You supply the deploy+boot job — build it exactly as in the standard workflow above
+   (adapt a find_boot_template match, keep its artifact auth), then add the console
+   proxy on top. You do NOT need an example anywhere: open_console_session returns (in
+   its `add_to_job` field) the exact `services` test action to paste in as the first
+   action, plus the `environment:` values to set. After submitting, poll
+   check_console_ready(job_id) until ready:true (instead of reading logs), then call
+   attach_console.
 
 Serving your own files to LAVA: when you have a build product (kernel, rootfs, DTB,
 script) you want a job to deploy/flash or a booted device to fetch, but no URL to host
