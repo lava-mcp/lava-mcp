@@ -12,6 +12,7 @@ from lava_mcp.server import (
     _docs_preamble,
     _enforce_user_allowlist,
     _lava_username,
+    _metadata_filters,
     _presented_token,
     _require_owner,
     _require_remote_access_device,
@@ -189,6 +190,17 @@ def test_write_tools_absent_in_read_only() -> None:
     assert "cancel_job" not in names
     # validate_job is non-mutating, so it stays available
     assert "validate_job" in names
+
+
+def test_metadata_filters_prefixes_keys_for_lava() -> None:
+    assert _metadata_filters(
+        {"build__id": "1234", "branch__startswith": "release/"}
+    ) == {
+        "metadata__build__id": "1234",
+        "metadata__branch__startswith": "release/",
+    }
+    assert _metadata_filters(None) == {}
+    assert _metadata_filters({}) == {}
 
 
 def test_lava_username_extraction() -> None:

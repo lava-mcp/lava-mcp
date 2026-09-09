@@ -659,6 +659,18 @@ def _docs_preamble(config: Config) -> str:
     return "\n\n".join(lines) + "\n\n"
 
 
+def _metadata_filters(metadata: dict | None) -> dict[str, Any]:
+    """Turn a {key: value} metadata filter into LAVA ``metadata__<key>`` query params.
+
+    The key may be nested and/or carry a Django lookup with ``__`` (e.g. ``build__id``,
+    ``branch__startswith``); LAVA's MetadataFilterMixin resolves it against the job's
+    metadata dict. Non-dict input yields no filter.
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    return {f"metadata__{key}": value for key, value in metadata.items()}
+
+
 def _token_names_only(rows: Any) -> list[dict]:
     """Reduce a LAVA remote-artifact-tokens listing to names only.
 
@@ -934,12 +946,21 @@ def build_server(config: Config) -> FastMCP:
         health: str | None = None,
         submitter: str | None = None,
         device_type: str | None = None,
+        metadata: dict | None = None,
         limit: int = 25,
     ) -> Any:
         """List test jobs, newest first, with optional filters.
 
         state is e.g. Submitted/Scheduling/Scheduled/Running/Canceling/Finished;
         health is Unknown/Complete/Incomplete/Canceled.
+
+        metadata filters on the job's metadata dict (what submitters record about a
+        build/source — see get_job): pass {key: value}, each becomes a LAVA
+        `metadata__<key>` query. The key may be nested and/or carry a Django lookup with
+        `__`, e.g. {"build.id"...} -> use "__": {"build__id": "1234"},
+        {"branch__startswith": "release/"}, {"source__icontains": "linux"}. Default
+        lookup is exact. This is the way to FIND jobs by what they built/tested (e.g. a
+        boot template for a specific branch or build) rather than scanning definitions.
         """
         return client().list_jobs(
             limit=limit,
@@ -947,6 +968,7 @@ def build_server(config: Config) -> FastMCP:
             health=health,
             submitter=submitter,
             requested_device_type=device_type,
+            **_metadata_filters(metadata),
         )
 
     @mcp.tool()
