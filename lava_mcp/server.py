@@ -65,8 +65,10 @@ device_type) (or list_jobs + get_job_definition) returns one; keep its deploy+bo
 actions, swap in your URL, and KEEP its artifact authentication (Authorization/token
 headers), and don't base it on an unrelated job (e.g. a health-check). You CAN instead
 craft a job yourself — that's fine — but before you do, study several recent jobs on
-that device_type (get_job_definition) AND read the LAVA documentation (the technical
-reference for the deploy/boot methods you will use); do not guess blind. Either way,
+that device_type (their definitions via get_job_definition, and their `metadata` via
+get_job — submitters often record the build/source/artifact context there) AND read the
+LAVA documentation (the technical reference for the deploy/boot methods you will use);
+do not guess blind. Either way,
 read the reference for each deploy method you use (see the required-reading note above),
 then validate_job before submitting.
 
@@ -949,7 +951,11 @@ def build_server(config: Config) -> FastMCP:
 
     @mcp.tool()
     def get_job(job_id: int) -> Any:
-        """Get the full record (state, health, device, times) for one job."""
+        """Get the full record for one job: state, health, assigned device, times, and
+        its `metadata` — a free-form dict submitters use to record build/source context
+        (image build id, git ref, artifact URLs, CI links). Read the metadata when
+        studying a job (e.g. choosing a template or debugging) — it often explains what
+        the job actually built/tested better than the definition alone."""
         return client().get_job(job_id)
 
     @mcp.tool()
