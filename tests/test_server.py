@@ -281,6 +281,14 @@ def test_require_test_services_device_type_noop_when_none_readable() -> None:
     )
 
 
+def test_config_reads_lava_source_repo_and_ref(monkeypatch) -> None:
+    monkeypatch.setenv("LAVA_SOURCE_REPO", "https://gitlab.com/lava/lava.git")
+    monkeypatch.setenv("LAVA_SOURCE_REF", "2026.07")
+    cfg = Config.from_env()
+    assert cfg.lava_source_repo == "https://gitlab.com/lava/lava.git"
+    assert cfg.lava_source_ref == "2026.07"
+
+
 def test_config_reads_split_user_allowlists(monkeypatch) -> None:
     monkeypatch.setenv("LAVA_MCP_HTTP_ALLOW_USERS", "alice, bob")
     monkeypatch.setenv("LAVA_MCP_SSH_ALLOW_USERS", "alice")

@@ -114,6 +114,35 @@ def test_list_devices_pagination(client: LavaClient) -> None:
 
 
 @responses.activate
+def test_list_jobs_forwards_metadata_filters(client: LavaClient) -> None:
+    responses.get(BASE + "jobs/", json={"count": 0, "next": None, "results": []})
+    # a hyphenated, django-lookup'd metadata key (as the server tool builds) reaches
+    # LAVA verbatim as a query param — matches the real prod key `build-commit`.
+    client.list_jobs(limit=10, state="Finished", **{"metadata__build-commit": "abc123"})
+    params = responses.calls[0].request.params
+    assert params["metadata__build-commit"] == "abc123"
+    assert params["state"] == "Finished"
+    assert params["limit"] == "10"
+
+
+@responses.activate
+def test_list_remote_artifact_tokens(client: LavaClient) -> None:
+    responses.get(
+        BASE + "remote-artifact-tokens/",
+        json={
+            "count": 2,
+            "results": [
+                {"name": "gitlab", "token": "S1"},
+                {"name": "osf", "token": "S2"},
+            ],
+        },
+    )
+    out = client.list_remote_artifact_tokens()
+    assert [t["name"] for t in out["results"]] == ["gitlab", "osf"]
+    assert responses.calls[0].request.method == "GET"
+
+
+@responses.activate
 def test_get_job_definition_uses_original(client: LavaClient) -> None:
     responses.get(
         BASE + "jobs/42/",
