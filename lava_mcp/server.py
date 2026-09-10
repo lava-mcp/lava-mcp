@@ -68,11 +68,10 @@ actions, swap in your URL, and KEEP its artifact authentication (Authorization/t
 headers), and don't base it on an unrelated job (e.g. a health-check). You CAN instead
 craft a job yourself — that's fine — but before you do, study several recent jobs on
 that device_type (their definitions via get_job_definition, and their `metadata` via
-get_job — submitters often record the build/source/artifact context there) AND read the
-LAVA documentation with read_lava_docs (the technical reference for the deploy/boot
-methods you will use); do not guess blind. Either way, read the reference for each
-deploy method you use (via read_lava_docs — see the required-reading note above), then
-validate_job before submitting.
+get_job — submitters often record the build/source/artifact context there); do not
+guess blind. If this server offers the read_lava_docs tool (the required-reading note
+above says so when it does), also read the action reference for the deploy/boot methods
+you use. Either way, validate_job before submitting.
 
 Job lifecycle tools: validate_job (check without submitting) -> submit_job (returns the
 job id) -> poll get_job for state and health, and read get_job_logs / get_job_results;
@@ -667,11 +666,13 @@ def _raw_source_url(repo: str, ref: str, path: str) -> str | None:
 
 
 def _docs_preamble(config: Config) -> str:
-    """A required-reading pointer to the LAVA technical reference, prepended to the
-    server instructions. It tells the agent to fetch the docs via the read_lava_docs
-    tool (the server fetches them, since most instances sit behind Anubis that blocks a
-    direct fetch). When the deployment declares where its LAVA source lives, also point
-    the agent at that repo and ref so it can read the exact deployed code."""
+    """Doc-reading preamble prepended to the server instructions — ONLY when the
+    deployment declares its LAVA source (LAVA_SOURCE_REPO), because read_lava_docs
+    fetches the docs from that repo. With no source configured there is nothing to
+    read, so we emit nothing and never tell the agent to read docs."""
+    if not config.lava_source_repo:
+        return ""
+    ref = config.lava_source_ref or "the deployed release"
     lines = [
         "REQUIRED READING — before building or submitting a job, read the relevant LAVA "
         "action reference with read_lava_docs (the server returns the reStructuredText "
@@ -683,17 +684,12 @@ def _docs_preamble(config: Config) -> str:
         "its deploy method — the general 'doc/v2/actions-deploy.rst' plus the method "
         "fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. "
         "actions-deploy-to-fastboot.rsti) — or, if the docs don't cover it, check the "
-        "deployed LAVA source (below, when declared). If neither is available, proceed. "
-        "It's not enforced, but confirm rather than guess: deploy parameters differ per "
-        "method and a wrong job wastes a board's time.",
+        "deployed LAVA source (below). If in doubt, confirm rather than guess: deploy "
+        "parameters differ per method and a wrong job wastes a board's time.",
+        "The LAVA running behind this instance is built from "
+        f"{config.lava_source_repo} at ref {ref} — read that source (also via "
+        "read_lava_docs) for exact behaviour the docs don't cover.",
     ]
-    if config.lava_source_repo:
-        ref = config.lava_source_ref or "the deployed release"
-        lines.append(
-            "The LAVA running behind this instance is built from "
-            f"{config.lava_source_repo} at ref {ref} — read that source for exact "
-            "behaviour the docs don't cover."
-        )
     return "\n\n".join(lines) + "\n\n"
 
 
@@ -930,38 +926,38 @@ def build_server(config: Config) -> FastMCP:
         """
         return {"tokens": _token_names_only(client().list_remote_artifact_tokens())}
 
-    @mcp.tool()
-    def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
-        """Read a LAVA documentation file (reStructuredText), fetched by the server.
+    # Only offer read_lava_docs when the deployment declares its LAVA source — with no
+    # repo there is nothing to fetch, so we neither register the tool nor (see
+    # _docs_preamble) tell the agent to read docs.
+    if config.lava_source_repo:
 
-        The server returns the docs' reStructuredText source from the deployed LAVA's
-        git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF). LAVA's docs live under `doc/v2/`
-        and `path` is repo-relative. There are ~100 pages — read only what your task
-        needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
-        'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method the
-        fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti). You
-        can also read non-doc source files this way. Returns {url, text} or {error}
-        (needs LAVA_SOURCE_REPO configured).
-        """
-        url = _raw_source_url(
-            config.lava_source_repo, config.lava_source_ref or "master", path
-        )
-        if url is None:
-            if not config.lava_source_repo:
-                return {
-                    "error": "the LAVA source repo is not configured on this server "
-                    "(set LAVA_SOURCE_REPO / LAVA_SOURCE_REF), so docs cannot be fetched"
-                }
-            return {"error": f"invalid path: {path!r}"}
-        try:
-            resp = requests.get(
-                url, timeout=config.timeout, headers={"User-Agent": _DOCS_UA}
+        @mcp.tool()
+        def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
+            """Read a LAVA documentation file (reStructuredText), fetched by the server.
+
+            The server returns the docs' reStructuredText source from the deployed
+            LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF). LAVA's docs live under
+            `doc/v2/` and `path` is repo-relative. There are ~100 pages — read only what
+            your task needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
+            'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method
+            the fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti).
+            You can also read non-doc source files this way. Returns {url, text} or
+            {error}.
+            """
+            url = _raw_source_url(
+                config.lava_source_repo, config.lava_source_ref or "master", path
             )
-        except requests.RequestException as exc:
-            return {"error": f"fetch failed: {exc}", "url": url}
-        if resp.status_code >= 400:
-            return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
-        return {"url": url, "text": resp.text}
+            if url is None:
+                return {"error": f"invalid path: {path!r}"}
+            try:
+                resp = requests.get(
+                    url, timeout=config.timeout, headers={"User-Agent": _DOCS_UA}
+                )
+            except requests.RequestException as exc:
+                return {"error": f"fetch failed: {exc}", "url": url}
+            if resp.status_code >= 400:
+                return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
+            return {"url": url, "text": resp.text}
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()
@@ -1493,8 +1489,8 @@ def build_server(config: Config) -> FastMCP:
             device_type), or list_jobs + get_job_definition), keeping its deploy+boot
             actions and artifact auth (Authorization/token headers) and swapping in your
             URL. You may craft the job yourself instead, but first study recent jobs on
-            the device_type and read the deploy/boot action reference via read_lava_docs.
-            Then add the console proxy on top.
+            the device_type (and, if the server offers read_lava_docs, the deploy/boot
+            action reference). Then add the console proxy on top.
 
             You do NOT need to find an example in any repo: this call returns, in
             ``add_to_job``, the exact ``services`` test action to paste in and the full

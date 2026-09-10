@@ -91,28 +91,41 @@ def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
     assert _presented_token(_FakeReq({})) is None
 
 
-def test_docs_preamble_points_at_the_read_lava_docs_tool() -> None:
-    pre = _docs_preamble(Config(url="https://lava.example.com/"))
-    assert "REQUIRED READING" in pre
-    # points at the tool and scopes reading to the action reference (not "all the docs")
-    assert "read_lava_docs" in pre
-    assert "doc/v2/actions-deploy.rst" in pre
-    assert "do NOT read them all" in pre
-    # no source repo configured -> no source pointer
-    assert "built from" not in pre
-    # when the deployment declares its LAVA source, point the agent at repo + ref
-    with_src = _docs_preamble(
-        Config(
-            url="https://lava.example.com",
-            lava_source_repo="https://gitlab.com/lava/lava.git",
-            lava_source_ref="2026.07",
-        )
+def test_docs_preamble_only_when_source_repo_set() -> None:
+    # no source repo -> nothing to read -> no preamble (never tell the agent to read)
+    assert _docs_preamble(Config(url="https://lava.example.com")) == ""
+    # with a source repo -> required reading points at read_lava_docs + action reference
+    cfg = Config(
+        url="https://lava.example.com",
+        lava_source_repo="https://gitlab.com/lava/lava.git",
+        lava_source_ref="2026.07",
     )
-    assert "https://gitlab.com/lava/lava.git" in with_src and "2026.07" in with_src
-    # it is actually prepended to the served instructions
-    server = build_server(Config(url="https://lava.example.com"))
-    assert server.instructions.startswith("REQUIRED READING")
-    assert "read_lava_docs" in server.instructions
+    pre = _docs_preamble(cfg)
+    assert pre.startswith("REQUIRED READING")
+    assert "read_lava_docs" in pre and "doc/v2/actions-deploy.rst" in pre
+    assert "do NOT read them all" in pre
+    assert "https://gitlab.com/lava/lava.git" in pre and "2026.07" in pre
+    # prepended to the served instructions only when configured
+    assert build_server(cfg).instructions.startswith("REQUIRED READING")
+    assert not build_server(
+        Config(url="https://lava.example.com")
+    ).instructions.startswith("REQUIRED READING")
+
+
+def test_read_lava_docs_registered_only_with_source_repo() -> None:
+    without = {
+        t.name for t in asyncio.run(build_server(Config(url="https://x")).list_tools())
+    }
+    assert "read_lava_docs" not in without
+    with_repo = {
+        t.name
+        for t in asyncio.run(
+            build_server(
+                Config(url="https://x", lava_source_repo="https://gitlab.com/lava/lava")
+            ).list_tools()
+        )
+    }
+    assert "read_lava_docs" in with_repo
 
 
 def test_safe_repo_path_blocks_traversal_and_absolute() -> None:
