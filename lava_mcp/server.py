@@ -665,6 +665,25 @@ def _raw_source_url(repo: str, ref: str, path: str) -> str | None:
     return f"https://{host}/{proj}/-/raw/{ref}/{safe}"
 
 
+def _fetch_source_file(url: str, timeout: float, cache: dict) -> dict:
+    """GET a raw source file, memoising successful results in ``cache`` (keyed by URL).
+
+    The repo+ref are fixed for the process and a pinned ref is immutable, so each page
+    is fetched from the git host at most once and served from memory thereafter. Errors
+    are not cached, so a transient failure is retried on the next call.
+    """
+    if url in cache:
+        return cache[url]
+    try:
+        resp = requests.get(url, timeout=timeout, headers={"User-Agent": _DOCS_UA})
+    except requests.RequestException as exc:
+        return {"error": f"fetch failed: {exc}", "url": url}
+    if resp.status_code >= 400:
+        return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
+    cache[url] = {"url": url, "text": resp.text}
+    return cache[url]
+
+
 def _docs_preamble(config: Config) -> str:
     """Doc-reading preamble prepended to the server instructions — ONLY when the
     deployment declares its LAVA source (LAVA_SOURCE_REPO), because read_lava_docs
@@ -930,34 +949,28 @@ def build_server(config: Config) -> FastMCP:
     # repo there is nothing to fetch, so we neither register the tool nor (see
     # _docs_preamble) tell the agent to read docs.
     if config.lava_source_repo:
+        # per-process cache: each page is fetched from the git host at most once.
+        _docs_cache: dict[str, dict] = {}
 
         @mcp.tool()
         def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
             """Read a LAVA documentation file (reStructuredText), fetched by the server.
 
             The server returns the docs' reStructuredText source from the deployed
-            LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF). LAVA's docs live under
-            `doc/v2/` and `path` is repo-relative. There are ~100 pages — read only what
-            your task needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
-            'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method
-            the fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti).
-            You can also read non-doc source files this way. Returns {url, text} or
-            {error}.
+            LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF), cached in memory after
+            the first fetch. LAVA's docs live under `doc/v2/` and `path` is repo-relative.
+            There are ~100 pages — read only what your task needs, chiefly the action
+            reference: 'doc/v2/actions-deploy.rst', 'doc/v2/actions-boot.rst',
+            'doc/v2/actions-test.rst', and per deploy method the fragment
+            'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti). You can
+            also read non-doc source files this way. Returns {url, text} or {error}.
             """
             url = _raw_source_url(
                 config.lava_source_repo, config.lava_source_ref or "master", path
             )
             if url is None:
                 return {"error": f"invalid path: {path!r}"}
-            try:
-                resp = requests.get(
-                    url, timeout=config.timeout, headers={"User-Agent": _DOCS_UA}
-                )
-            except requests.RequestException as exc:
-                return {"error": f"fetch failed: {exc}", "url": url}
-            if resp.status_code >= 400:
-                return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
-            return {"url": url, "text": resp.text}
+            return _fetch_source_file(url, config.timeout, _docs_cache)
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()

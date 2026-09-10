@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import responses
 
 from lava_mcp.config import Config
 from lava_mcp.server import (
@@ -11,6 +12,7 @@ from lava_mcp.server import (
     _discover_console_target,
     _docs_preamble,
     _enforce_user_allowlist,
+    _fetch_source_file,
     _lava_username,
     _metadata_filters,
     _presented_token,
@@ -159,6 +161,23 @@ def test_raw_source_url_supports_gitlab_and_github() -> None:
     assert _raw_source_url("", "main", "doc/v2/x.rst") is None
     assert _raw_source_url("https://gitlab.com/lava/lava", "", "doc/v2/x.rst") is None
     assert _raw_source_url("https://gitlab.com/lava/lava", "main", "../etc") is None
+
+
+@responses.activate
+def test_fetch_source_file_caches_success_but_not_errors() -> None:
+    ok_url = "https://gitlab.com/lava/lava/-/raw/master/doc/v2/actions-deploy.rst"
+    responses.get(ok_url, body="deploy docs")
+    cache: dict = {}
+    first = _fetch_source_file(ok_url, 5.0, cache)
+    second = _fetch_source_file(ok_url, 5.0, cache)
+    assert first == second and first["text"] == "deploy docs"
+    # second call served from memory — only one HTTP request was made
+    assert len(responses.calls) == 1 and ok_url in cache
+    # errors are not cached, so a transient failure can be retried
+    err_url = "https://gitlab.com/lava/lava/-/raw/master/doc/v2/missing.rst"
+    responses.get(err_url, status=404)
+    err = _fetch_source_file(err_url, 5.0, cache)
+    assert "404" in err["error"] and err_url not in cache
 
 
 def test_artifact_base_url_prefers_explicit_then_derives_from_ws() -> None:
