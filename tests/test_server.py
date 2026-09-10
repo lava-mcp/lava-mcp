@@ -94,10 +94,10 @@ def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
 def test_docs_preamble_points_at_the_read_lava_docs_tool() -> None:
     pre = _docs_preamble(Config(url="https://lava.example.com/"))
     assert "REQUIRED READING" in pre
-    # points at the tool reading RST source (not a URL the agent can't reach), + Anubis
+    # points at the tool and scopes reading to the action reference (not "all the docs")
     assert "read_lava_docs" in pre
-    assert "doc/v2/index.rst" in pre
-    assert "Anubis" in pre
+    assert "doc/v2/actions-deploy.rst" in pre
+    assert "do NOT read them all" in pre
     # no source repo configured -> no source pointer
     assert "built from" not in pre
     # when the deployment declares its LAVA source, point the agent at repo + ref

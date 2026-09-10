@@ -673,20 +673,19 @@ def _docs_preamble(config: Config) -> str:
     direct fetch). When the deployment declares where its LAVA source lives, also point
     the agent at that repo and ref so it can read the exact deployed code."""
     lines = [
-        "REQUIRED READING — before using these tools, read LAVA's docs via the "
-        "read_lava_docs tool: start with read_lava_docs('doc/v2/index.rst') and follow "
-        "the pages its toctree links. The server fetches the docs' reStructuredText "
-        "source from the deployed LAVA's git repo FOR you — do NOT try to open the "
-        "rendered docs website directly, most LAVA instances are behind Anubis "
-        "bot-protection that will block you. Learn LAVA's architecture (jobs, "
-        "device-types, the deploy/boot/test pipeline, namespaces, results); do not "
-        "guess at behaviour you can confirm there.",
-        "STRONGLY SUGGESTED before you submit any job that deploys: for each deploy "
-        "method it uses, read that method's reference too (e.g. "
-        "read_lava_docs('doc/v2/actions-deploy.rst')) — or, if the docs don't cover it, "
-        "check the deployed LAVA source (below, when declared). If neither is "
-        "available, proceed. It's not enforced, but confirm rather than guess: deploy "
-        "parameters differ per method and a wrong job wastes a board's time.",
+        "REQUIRED READING — before building or submitting a job, read the relevant LAVA "
+        "action reference with read_lava_docs (the server returns the reStructuredText "
+        "for you). LAVA has ~100 doc pages; do NOT read them all — read only what your "
+        "job needs, chiefly the deploy/boot/test action reference: "
+        "read_lava_docs('doc/v2/actions-deploy.rst'), 'doc/v2/actions-boot.rst', "
+        "'doc/v2/actions-test.rst'. Do not guess at behaviour you can confirm there.",
+        "STRONGLY SUGGESTED before you submit a job that deploys: read the reference for "
+        "its deploy method — the general 'doc/v2/actions-deploy.rst' plus the method "
+        "fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. "
+        "actions-deploy-to-fastboot.rsti) — or, if the docs don't cover it, check the "
+        "deployed LAVA source (below, when declared). If neither is available, proceed. "
+        "It's not enforced, but confirm rather than guess: deploy parameters differ per "
+        "method and a wrong job wastes a board's time.",
     ]
     if config.lava_source_repo:
         ref = config.lava_source_ref or "the deployed release"
@@ -932,19 +931,17 @@ def build_server(config: Config) -> FastMCP:
         return {"tokens": _token_names_only(client().list_remote_artifact_tokens())}
 
     @mcp.tool()
-    def read_lava_docs(path: str = "doc/v2/index.rst") -> Any:
+    def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
         """Read a LAVA documentation file (reStructuredText), fetched by the server.
 
-        Use THIS to read the LAVA docs — do NOT try to open the rendered docs website
-        yourself: most LAVA instances sit behind Anubis bot-protection that blocks
-        non-browser clients. Instead the server fetches the docs' reStructuredText
-        SOURCE from the deployed LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF),
-        which is both cleaner than the rendered HTML and not behind Anubis. LAVA's docs
-        live under `doc/v2/`; `path` is repo-relative — START with
-        read_lava_docs('doc/v2/index.rst') (its toctree lists every page), then read a
-        specific page, e.g. 'doc/v2/actions-deploy.rst', 'doc/v2/actions-boot.rst',
-        'doc/v2/first-job.rst'. You can also read non-doc source files this way. Returns
-        {url, text} or {error} (needs LAVA_SOURCE_REPO configured).
+        The server returns the docs' reStructuredText source from the deployed LAVA's
+        git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF). LAVA's docs live under `doc/v2/`
+        and `path` is repo-relative. There are ~100 pages — read only what your task
+        needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
+        'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method the
+        fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti). You
+        can also read non-doc source files this way. Returns {url, text} or {error}
+        (needs LAVA_SOURCE_REPO configured).
         """
         url = _raw_source_url(
             config.lava_source_repo, config.lava_source_ref or "master", path
@@ -1496,8 +1493,8 @@ def build_server(config: Config) -> FastMCP:
             device_type), or list_jobs + get_job_definition), keeping its deploy+boot
             actions and artifact auth (Authorization/token headers) and swapping in your
             URL. You may craft the job yourself instead, but first study recent jobs on
-            the device_type and the LAVA docs for the deploy/boot methods. Then add the
-            console proxy on top.
+            the device_type and read the deploy/boot action reference via read_lava_docs.
+            Then add the console proxy on top.
 
             You do NOT need to find an example in any repo: this call returns, in
             ``add_to_job``, the exact ``services`` test action to paste in and the full
