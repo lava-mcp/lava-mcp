@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import re
 from typing import Any
 from urllib.parse import urlparse
 
+import requests
 import yaml
 
 logger = logging.getLogger("lava_mcp")
@@ -67,10 +69,10 @@ headers), and don't base it on an unrelated job (e.g. a health-check). You CAN i
 craft a job yourself — that's fine — but before you do, study several recent jobs on
 that device_type (their definitions via get_job_definition, and their `metadata` via
 get_job — submitters often record the build/source/artifact context there) AND read the
-LAVA documentation (the technical reference for the deploy/boot methods you will use);
-do not guess blind. Either way,
-read the reference for each deploy method you use (see the required-reading note above),
-then validate_job before submitting.
+LAVA documentation with read_lava_docs (the technical reference for the deploy/boot
+methods you will use); do not guess blind. Either way, read the reference for each
+deploy method you use (via read_lava_docs — see the required-reading note above), then
+validate_job before submitting.
 
 Job lifecycle tools: validate_job (check without submitting) -> submit_job (returns the
 job id) -> poll get_job for state and health, and read get_job_logs / get_job_results;
@@ -628,24 +630,61 @@ def _presented_token(request: Any) -> str | None:
 
 _TERMINAL_JOB_STATES = {"Finished", "Canceling", "Canceled"}
 
-_ARCH_DOCS_PATH = "/static/docs/technical-references/architecture.html"
+_DOCS_UA = "lava-mcp docs fetch"
+_DOC_PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
+
+
+def _safe_repo_path(path: str) -> str | None:
+    """A relative repo path, or None if unsafe. Blocks traversal, absolute URLs and
+    odd characters so read_lava_docs can only reach files within the source repo."""
+    p = (path or "").strip().lstrip("/").split("#", 1)[0]
+    if not p or ".." in p or "://" in p or "\\" in p:
+        return None
+    return p if _DOC_PATH_RE.fullmatch(p) else None
+
+
+def _raw_source_url(repo: str, ref: str, path: str) -> str | None:
+    """Raw-file URL for ``path`` in the LAVA source repo at ``ref``.
+
+    Supports GitHub and GitLab remotes (gitlab.com and self-hosted), which covers LAVA
+    (canonically gitlab.com/lava/lava) and forks. None if repo/ref missing or the path
+    is unsafe. The host comes from operator config, not the agent, and the path is
+    confined to the repo tree — so an agent cannot point this at an arbitrary URL.
+    """
+    safe = _safe_repo_path(path)
+    if not repo or not ref or safe is None:
+        return None
+    r = repo.strip()
+    r = r[:-4] if r.endswith(".git") else r
+    parsed = urlparse(r if "://" in r else "https://" + r)
+    host, proj = parsed.netloc, parsed.path.strip("/")
+    if not host or not proj:
+        return None
+    if "github.com" in host:
+        return f"https://raw.githubusercontent.com/{proj}/{ref}/{safe}"
+    # GitLab (gitlab.com or self-hosted): <host>/<project>/-/raw/<ref>/<path>
+    return f"https://{host}/{proj}/-/raw/{ref}/{safe}"
 
 
 def _docs_preamble(config: Config) -> str:
     """A required-reading pointer to the LAVA technical reference, prepended to the
-    server instructions. Uses the pinned instance URL when set, else a placeholder the
-    agent fills from its own LAVA URL (whoami/version report the instance). When the
-    deployment declares where its LAVA source lives, also point the agent at that repo
-    and ref so it can read the exact deployed code."""
-    base = config.url.rstrip("/") if config.url else "<your LAVA URL>"
+    server instructions. It tells the agent to fetch the docs via the read_lava_docs
+    tool (the server fetches them, since most instances sit behind Anubis that blocks a
+    direct fetch). When the deployment declares where its LAVA source lives, also point
+    the agent at that repo and ref so it can read the exact deployed code."""
     lines = [
-        "REQUIRED READING — before using these tools, read LAVA's technical reference "
-        f"at {base}{_ARCH_DOCS_PATH} (and the pages it links) to understand LAVA's "
-        "architecture: jobs, device-types, the deploy/boot/test pipeline, namespaces, "
-        "and results. Do not guess at LAVA behaviour you can confirm there.",
+        "REQUIRED READING — before using these tools, read LAVA's docs via the "
+        "read_lava_docs tool: start with read_lava_docs('doc/v2/index.rst') and follow "
+        "the pages its toctree links. The server fetches the docs' reStructuredText "
+        "source from the deployed LAVA's git repo FOR you — do NOT try to open the "
+        "rendered docs website directly, most LAVA instances are behind Anubis "
+        "bot-protection that will block you. Learn LAVA's architecture (jobs, "
+        "device-types, the deploy/boot/test pipeline, namespaces, results); do not "
+        "guess at behaviour you can confirm there.",
         "STRONGLY SUGGESTED before you submit any job that deploys: for each deploy "
-        "method it uses, read that method's technical reference — or, if the docs don't "
-        "cover it, check the deployed LAVA source (below, when declared). If neither is "
+        "method it uses, read that method's reference too (e.g. "
+        "read_lava_docs('doc/v2/actions-deploy.rst')) — or, if the docs don't cover it, "
+        "check the deployed LAVA source (below, when declared). If neither is "
         "available, proceed. It's not enforced, but confirm rather than guess: deploy "
         "parameters differ per method and a wrong job wastes a board's time.",
     ]
@@ -891,6 +930,41 @@ def build_server(config: Config) -> FastMCP:
         returned — only their names (and any non-secret metadata).
         """
         return {"tokens": _token_names_only(client().list_remote_artifact_tokens())}
+
+    @mcp.tool()
+    def read_lava_docs(path: str = "doc/v2/index.rst") -> Any:
+        """Read a LAVA documentation file (reStructuredText), fetched by the server.
+
+        Use THIS to read the LAVA docs — do NOT try to open the rendered docs website
+        yourself: most LAVA instances sit behind Anubis bot-protection that blocks
+        non-browser clients. Instead the server fetches the docs' reStructuredText
+        SOURCE from the deployed LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF),
+        which is both cleaner than the rendered HTML and not behind Anubis. LAVA's docs
+        live under `doc/v2/`; `path` is repo-relative — START with
+        read_lava_docs('doc/v2/index.rst') (its toctree lists every page), then read a
+        specific page, e.g. 'doc/v2/actions-deploy.rst', 'doc/v2/actions-boot.rst',
+        'doc/v2/first-job.rst'. You can also read non-doc source files this way. Returns
+        {url, text} or {error} (needs LAVA_SOURCE_REPO configured).
+        """
+        url = _raw_source_url(
+            config.lava_source_repo, config.lava_source_ref or "master", path
+        )
+        if url is None:
+            if not config.lava_source_repo:
+                return {
+                    "error": "the LAVA source repo is not configured on this server "
+                    "(set LAVA_SOURCE_REPO / LAVA_SOURCE_REF), so docs cannot be fetched"
+                }
+            return {"error": f"invalid path: {path!r}"}
+        try:
+            resp = requests.get(
+                url, timeout=config.timeout, headers={"User-Agent": _DOCS_UA}
+            )
+        except requests.RequestException as exc:
+            return {"error": f"fetch failed: {exc}", "url": url}
+        if resp.status_code >= 400:
+            return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
+        return {"url": url, "text": resp.text}
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()

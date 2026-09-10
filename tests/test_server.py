@@ -14,10 +14,12 @@ from lava_mcp.server import (
     _lava_username,
     _metadata_filters,
     _presented_token,
+    _raw_source_url,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
     _require_test_services_device_type,
+    _safe_repo_path,
     _token_names_only,
     _unproxyable_console_note,
     build_console_ready_action,
@@ -89,14 +91,13 @@ def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
     assert _presented_token(_FakeReq({})) is None
 
 
-def test_docs_preamble_points_at_the_technical_reference() -> None:
-    arch = "/static/docs/technical-references/architecture.html"
-    # pinned instance -> concrete URL
+def test_docs_preamble_points_at_the_read_lava_docs_tool() -> None:
     pre = _docs_preamble(Config(url="https://lava.example.com/"))
     assert "REQUIRED READING" in pre
-    assert f"https://lava.example.com{arch}" in pre
-    # multi-tenant (no pinned URL) -> placeholder the agent fills in
-    assert f"<your LAVA URL>{arch}" in _docs_preamble(Config(url=""))
+    # points at the tool reading RST source (not a URL the agent can't reach), + Anubis
+    assert "read_lava_docs" in pre
+    assert "doc/v2/index.rst" in pre
+    assert "Anubis" in pre
     # no source repo configured -> no source pointer
     assert "built from" not in pre
     # when the deployment declares its LAVA source, point the agent at repo + ref
@@ -111,7 +112,40 @@ def test_docs_preamble_points_at_the_technical_reference() -> None:
     # it is actually prepended to the served instructions
     server = build_server(Config(url="https://lava.example.com"))
     assert server.instructions.startswith("REQUIRED READING")
-    assert arch in server.instructions
+    assert "read_lava_docs" in server.instructions
+
+
+def test_safe_repo_path_blocks_traversal_and_absolute() -> None:
+    assert _safe_repo_path("doc/v2/actions-deploy.rst") == "doc/v2/actions-deploy.rst"
+    assert _safe_repo_path("/doc/v2/index.rst") == "doc/v2/index.rst"  # leading /
+    assert _safe_repo_path("doc/v2/index.rst#boot") == "doc/v2/index.rst"  # fragment
+    assert _safe_repo_path("../../etc/passwd") is None
+    assert _safe_repo_path("https://evil.example/x") is None
+    assert _safe_repo_path("a b.rst") is None  # space -> rejected
+    assert _safe_repo_path("") is None
+
+
+def test_raw_source_url_supports_gitlab_and_github() -> None:
+    # GitLab (canonical LAVA), .git suffix stripped, self-hosted host preserved
+    assert (
+        _raw_source_url(
+            "https://gitlab.com/lava/lava.git", "2026.07", "doc/v2/index.rst"
+        )
+        == "https://gitlab.com/lava/lava/-/raw/2026.07/doc/v2/index.rst"
+    )
+    assert (
+        _raw_source_url("https://gitlab.example.org/g/p", "main", "doc/v2/x.rst")
+        == "https://gitlab.example.org/g/p/-/raw/main/doc/v2/x.rst"
+    )
+    # GitHub uses raw.githubusercontent.com
+    assert (
+        _raw_source_url("https://github.com/o/r", "v1", "doc/v2/x.rst")
+        == "https://raw.githubusercontent.com/o/r/v1/doc/v2/x.rst"
+    )
+    # missing repo/ref or unsafe path -> None (agent can't point it elsewhere)
+    assert _raw_source_url("", "main", "doc/v2/x.rst") is None
+    assert _raw_source_url("https://gitlab.com/lava/lava", "", "doc/v2/x.rst") is None
+    assert _raw_source_url("https://gitlab.com/lava/lava", "main", "../etc") is None
 
 
 def test_artifact_base_url_prefers_explicit_then_derives_from_ws() -> None:
