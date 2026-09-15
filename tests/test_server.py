@@ -105,8 +105,8 @@ def test_docs_preamble_only_when_source_repo_set() -> None:
     )
     pre = _docs_preamble(cfg)
     assert pre.startswith("REQUIRED READING")
-    assert "read_lava_docs" in pre and "doc/v2/actions-deploy.rst" in pre
-    assert "do NOT read them all" in pre
+    assert "read_lava_docs" in pre
+    assert "doc/content/technical-references/architecture.md" in pre
     assert "https://gitlab.com/lava/lava.git" in pre and "2026.07" in pre
     # prepended to the served instructions only when configured
     assert build_server(cfg).instructions.startswith("REQUIRED READING")

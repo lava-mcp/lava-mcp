@@ -41,8 +41,8 @@ class Config:
     # running behind this instance when the docs don't answer a question. Set both to
     # the git repo URL and the ref (tag/branch/commit) the deployment was built from.
     # git repo + ref the deployed LAVA was built from. Surfaced to agents, and read by
-    # read_lava_docs to fetch the exact version's docs (reStructuredText under doc/v2/)
-    # and let agents read the running code when the docs don't answer a question.
+    # read_lava_docs to fetch the exact version's docs (Markdown under doc/content/) and
+    # let agents read the running code when the docs don't answer a question.
     # lava_source_ref is optional: when empty the server derives it from the LAVA API's
     # reported version (a release tag upstream, or the deployed commit for a describe
     # build). Set it explicitly to override.

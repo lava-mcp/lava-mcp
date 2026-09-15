@@ -707,23 +707,20 @@ def _docs_preamble(config: Config) -> str:
     read, so we emit nothing and never tell the agent to read docs."""
     if not config.lava_source_repo:
         return ""
-    ref = config.lava_source_ref or "the deployed release"
+    ref = config.lava_source_ref or "the deployed version"
     lines = [
-        "REQUIRED READING — before building or submitting a job, read the relevant LAVA "
-        "action reference with read_lava_docs (the server returns the reStructuredText "
-        "for you). LAVA has ~100 doc pages; do NOT read them all — read only what your "
-        "job needs, chiefly the deploy/boot/test action reference: "
-        "read_lava_docs('doc/v2/actions-deploy.rst'), 'doc/v2/actions-boot.rst', "
-        "'doc/v2/actions-test.rst'. Do not guess at behaviour you can confirm there.",
-        "STRONGLY SUGGESTED before you submit a job that deploys: read the reference for "
-        "its deploy method — the general 'doc/v2/actions-deploy.rst' plus the method "
-        "fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. "
-        "actions-deploy-to-fastboot.rsti) — or, if the docs don't cover it, check the "
-        "deployed LAVA source (below). If in doubt, confirm rather than guess: deploy "
-        "parameters differ per method and a wrong job wastes a board's time.",
+        "REQUIRED READING — before building or submitting a job, read LAVA's TECHNICAL "
+        "REFERENCE with the read_lava_docs tool (the server fetches the Markdown source "
+        "for you). Read every page under doc/content/technical-references/ — "
+        "read_lava_docs('doc/content/technical-references/architecture.md'), then "
+        "results.md, state-machine.md, authorization.md, job-metadata.md, and the pages "
+        "under its configuration/, job-definition/ and services/ subdirs — so you "
+        "understand jobs, the deploy/boot/test pipeline, namespaces, and results. Do "
+        "not guess at behaviour you can confirm there.",
         "The LAVA running behind this instance is built from "
-        f"{config.lava_source_repo} at ref {ref} — read that source (also via "
-        "read_lava_docs) for exact behaviour the docs don't cover.",
+        f"{config.lava_source_repo} at ref {ref}; read_lava_docs serves docs and source "
+        "from exactly that, so it matches the running code. (If it reports the version "
+        "can't be read, docs are unavailable — do not guess.)",
     ]
     return "\n\n".join(lines) + "\n\n"
 
@@ -971,10 +968,10 @@ def build_server(config: Config) -> FastMCP:
 
         def _docs_ref() -> str:
             # explicit LAVA_SOURCE_REF wins; otherwise derive it from the LAVA API's
-            # reported version (a tag upstream, or the deployed commit sha for a
-            # git-describe build). Cache ONLY a successful resolution — on a failed
-            # version query fall back to 'master' for this call but retry next time,
-            # rather than pinning the fallback for the whole process.
+            # reported version (a tag upstream, or the deployed commit for a
+            # git-describe build). No 'master' fallback: if the version cannot be read
+            # we return "" and refuse to serve, rather than guess a ref that may not
+            # match the deployed code. Only a successful resolution is cached.
             if config.lava_source_ref:
                 return config.lava_source_ref
             if _ref_holder.get("ref"):
@@ -986,26 +983,34 @@ def build_server(config: Config) -> FastMCP:
                 ref = ""
             if ref:
                 _ref_holder["ref"] = ref
-                return ref
-            return "master"
+            return ref
 
         @mcp.tool()
-        def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
-            """Read a LAVA documentation file (reStructuredText), fetched by the server.
+        def read_lava_docs(
+            path: str = "doc/content/technical-references/architecture.md",
+        ) -> Any:
+            """Read a LAVA documentation file (Markdown), fetched by the server.
 
-            The server returns the docs' reStructuredText source from the deployed
-            LAVA's git repo (LAVA_SOURCE_REPO), at LAVA_SOURCE_REF or — when that is
-            unset — the ref derived from the LAVA API's reported version (a release tag
-            upstream, or the exact deployed commit for a git-describe build). Results are
-            cached in memory after the first fetch. LAVA's docs live under `doc/v2/` and
-            `path` is repo-relative. There are ~100 pages — read only what your task
-            needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
-            'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method
-            the fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti).
+            The server returns the doc's Markdown source from the deployed LAVA's git
+            repo (LAVA_SOURCE_REPO), at LAVA_SOURCE_REF or — when unset — the ref derived
+            from the LAVA API's reported version (a release tag upstream, or the exact
+            deployed commit for a git-describe build). Results are cached in memory. If
+            the deployed version cannot be read, this returns an error and serves nothing
+            (no guessed ref). LAVA's docs live under `doc/content/` and `path` is
+            repo-relative; the technical reference is `doc/content/technical-references/`
+            (architecture.md, results.md, state-machine.md, authorization.md,
+            job-metadata.md, and the configuration/, job-definition/, services/ subdirs).
             You can also read non-doc source files this way. Returns {url, text} or
             {error}.
             """
-            url = _raw_source_url(config.lava_source_repo, _docs_ref(), path)
+            ref = _docs_ref()
+            if not ref:
+                return {
+                    "error": "cannot read the deployed LAVA version (system/version "
+                    "failed), so docs/source are unavailable — set LAVA_SOURCE_REF to "
+                    "override, or retry once the LAVA API is reachable"
+                }
+            url = _raw_source_url(config.lava_source_repo, ref, path)
             if url is None:
                 return {"error": f"invalid path: {path!r}"}
             return _fetch_source_file(url, config.timeout, _docs_cache)
