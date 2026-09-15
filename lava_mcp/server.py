@@ -972,19 +972,22 @@ def build_server(config: Config) -> FastMCP:
         def _docs_ref() -> str:
             # explicit LAVA_SOURCE_REF wins; otherwise derive it from the LAVA API's
             # reported version (a tag upstream, or the deployed commit sha for a
-            # git-describe build), resolved once and cached.
+            # git-describe build). Cache ONLY a successful resolution — on a failed
+            # version query fall back to 'master' for this call but retry next time,
+            # rather than pinning the fallback for the whole process.
             if config.lava_source_ref:
                 return config.lava_source_ref
-            if "ref" not in _ref_holder:
-                try:
-                    v = client().version()
-                    ref = _ref_from_version(
-                        v.get("version") if isinstance(v, dict) else v
-                    )
-                except LavaError:
-                    ref = ""
-                _ref_holder["ref"] = ref or "master"
-            return _ref_holder["ref"]
+            if _ref_holder.get("ref"):
+                return _ref_holder["ref"]
+            try:
+                v = client().version()
+                ref = _ref_from_version(v.get("version") if isinstance(v, dict) else v)
+            except LavaError:
+                ref = ""
+            if ref:
+                _ref_holder["ref"] = ref
+                return ref
+            return "master"
 
         @mcp.tool()
         def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
