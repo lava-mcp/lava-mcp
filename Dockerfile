@@ -6,6 +6,11 @@
 #           lava-mcp
 FROM python:3.13-slim
 
+# git + ca-certificates: read_lava_docs mirrors the deployed LAVA source with git.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY lava_mcp ./lava_mcp

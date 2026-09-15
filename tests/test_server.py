@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-import responses
 
 from lava_mcp.config import Config
 from lava_mcp.server import (
@@ -12,17 +11,14 @@ from lava_mcp.server import (
     _discover_console_target,
     _docs_preamble,
     _enforce_user_allowlist,
-    _fetch_source_file,
     _lava_username,
     _metadata_filters,
     _presented_token,
-    _raw_source_url,
     _ref_from_version,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
     _require_test_services_device_type,
-    _safe_repo_path,
     _token_names_only,
     _unproxyable_console_note,
     build_console_ready_action,
@@ -106,7 +102,7 @@ def test_docs_preamble_only_when_source_repo_set() -> None:
     pre = _docs_preamble(cfg)
     assert pre.startswith("REQUIRED READING")
     assert "read_lava_docs" in pre
-    assert "doc/content/technical-references/architecture.md" in pre
+    assert "doc/content/technical-references/" in pre
     assert "https://gitlab.com/lava/lava.git" in pre and "2026.07" in pre
     # prepended to the served instructions only when configured
     assert build_server(cfg).instructions.startswith("REQUIRED READING")
@@ -131,16 +127,6 @@ def test_read_lava_docs_registered_only_with_source_repo() -> None:
     assert "read_lava_docs" in with_repo
 
 
-def test_safe_repo_path_blocks_traversal_and_absolute() -> None:
-    assert _safe_repo_path("doc/v2/actions-deploy.rst") == "doc/v2/actions-deploy.rst"
-    assert _safe_repo_path("/doc/v2/index.rst") == "doc/v2/index.rst"  # leading /
-    assert _safe_repo_path("doc/v2/index.rst#boot") == "doc/v2/index.rst"  # fragment
-    assert _safe_repo_path("../../etc/passwd") is None
-    assert _safe_repo_path("https://evil.example/x") is None
-    assert _safe_repo_path("a b.rst") is None  # space -> rejected
-    assert _safe_repo_path("") is None
-
-
 def test_ref_from_version_handles_tag_and_git_describe() -> None:
     # fork: branch-git_describe ending in the commit sha -> use the exact commit
     assert _ref_from_version("2026.07-qualcomm-2026.07-42-7bca805b9") == "7bca805b9"
@@ -152,46 +138,6 @@ def test_ref_from_version_handles_tag_and_git_describe() -> None:
     # unusable input
     assert _ref_from_version("") == ""
     assert _ref_from_version(None) == ""
-
-
-def test_raw_source_url_supports_gitlab_and_github() -> None:
-    # GitLab (canonical LAVA), .git suffix stripped, self-hosted host preserved
-    assert (
-        _raw_source_url(
-            "https://gitlab.com/lava/lava.git", "2026.07", "doc/v2/index.rst"
-        )
-        == "https://gitlab.com/lava/lava/-/raw/2026.07/doc/v2/index.rst"
-    )
-    assert (
-        _raw_source_url("https://gitlab.example.org/g/p", "main", "doc/v2/x.rst")
-        == "https://gitlab.example.org/g/p/-/raw/main/doc/v2/x.rst"
-    )
-    # GitHub uses raw.githubusercontent.com
-    assert (
-        _raw_source_url("https://github.com/o/r", "v1", "doc/v2/x.rst")
-        == "https://raw.githubusercontent.com/o/r/v1/doc/v2/x.rst"
-    )
-    # missing repo/ref or unsafe path -> None (agent can't point it elsewhere)
-    assert _raw_source_url("", "main", "doc/v2/x.rst") is None
-    assert _raw_source_url("https://gitlab.com/lava/lava", "", "doc/v2/x.rst") is None
-    assert _raw_source_url("https://gitlab.com/lava/lava", "main", "../etc") is None
-
-
-@responses.activate
-def test_fetch_source_file_caches_success_but_not_errors() -> None:
-    ok_url = "https://gitlab.com/lava/lava/-/raw/master/doc/v2/actions-deploy.rst"
-    responses.get(ok_url, body="deploy docs")
-    cache: dict = {}
-    first = _fetch_source_file(ok_url, 5.0, cache)
-    second = _fetch_source_file(ok_url, 5.0, cache)
-    assert first == second and first["text"] == "deploy docs"
-    # second call served from memory — only one HTTP request was made
-    assert len(responses.calls) == 1 and ok_url in cache
-    # errors are not cached, so a transient failure can be retried
-    err_url = "https://gitlab.com/lava/lava/-/raw/master/doc/v2/missing.rst"
-    responses.get(err_url, status=404)
-    err = _fetch_source_file(err_url, 5.0, cache)
-    assert "404" in err["error"] and err_url not in cache
 
 
 def test_artifact_base_url_prefers_explicit_then_derives_from_ws() -> None:

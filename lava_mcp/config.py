@@ -48,6 +48,10 @@ class Config:
     # build). Set it explicitly to override.
     lava_source_repo: str = ""
     lava_source_ref: str = ""
+    # local checkout dir for the source mirror (empty -> a temp subdir) and how often
+    # (seconds) the background poller re-reads the version and updates the checkout.
+    lava_source_dir: str = ""
+    lava_source_poll_interval: float = 300.0
     # serving (hostable mode)
     transport: str = "stdio"  # "stdio" | "streamable-http"
     host: str = "127.0.0.1"
@@ -120,6 +124,10 @@ class Config:
             api_version=os.environ.get("LAVA_API_VERSION", "v0.3"),
             lava_source_repo=os.environ.get("LAVA_SOURCE_REPO", ""),
             lava_source_ref=os.environ.get("LAVA_SOURCE_REF", ""),
+            lava_source_dir=os.environ.get("LAVA_SOURCE_DIR", ""),
+            lava_source_poll_interval=float(
+                os.environ.get("LAVA_SOURCE_POLL_INTERVAL", "300")
+            ),
             read_only=_env_bool("LAVA_MCP_READ_ONLY"),
             timeout=float(os.environ.get("LAVA_MCP_TIMEOUT", "30")),
             transport=os.environ.get("LAVA_MCP_TRANSPORT", "stdio"),

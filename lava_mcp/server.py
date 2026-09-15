@@ -16,7 +16,6 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-import requests
 import yaml
 
 logger = logging.getLogger("lava_mcp")
@@ -28,6 +27,7 @@ from .client import LavaClient, LavaError, client_from, ser2net_endpoint
 from .config import Config
 from .gateway import Gateway
 from .jobs import build_downloads_action, build_interactive_job, download_label
+from .source import LavaSourceMirror
 
 # The interactive gateway is WebSocket-only: the dial-out containers and human
 # clients reach it exclusively over wss://.../gateway-ssh (via websocat). Without an
@@ -629,41 +629,6 @@ def _presented_token(request: Any) -> str | None:
 
 _TERMINAL_JOB_STATES = {"Finished", "Canceling", "Canceled"}
 
-_DOCS_UA = "lava-mcp docs fetch"
-_DOC_PATH_RE = re.compile(r"[A-Za-z0-9._/-]+")
-
-
-def _safe_repo_path(path: str) -> str | None:
-    """A relative repo path, or None if unsafe. Blocks traversal, absolute URLs and
-    odd characters so read_lava_docs can only reach files within the source repo."""
-    p = (path or "").strip().lstrip("/").split("#", 1)[0]
-    if not p or ".." in p or "://" in p or "\\" in p:
-        return None
-    return p if _DOC_PATH_RE.fullmatch(p) else None
-
-
-def _raw_source_url(repo: str, ref: str, path: str) -> str | None:
-    """Raw-file URL for ``path`` in the LAVA source repo at ``ref``.
-
-    Supports GitHub and GitLab remotes (gitlab.com and self-hosted), which covers LAVA
-    (canonically gitlab.com/lava/lava) and forks. None if repo/ref missing or the path
-    is unsafe. The host comes from operator config, not the agent, and the path is
-    confined to the repo tree — so an agent cannot point this at an arbitrary URL.
-    """
-    safe = _safe_repo_path(path)
-    if not repo or not ref or safe is None:
-        return None
-    r = repo.strip()
-    r = r[:-4] if r.endswith(".git") else r
-    parsed = urlparse(r if "://" in r else "https://" + r)
-    host, proj = parsed.netloc, parsed.path.strip("/")
-    if not host or not proj:
-        return None
-    if "github.com" in host:
-        return f"https://raw.githubusercontent.com/{proj}/{ref}/{safe}"
-    # GitLab (gitlab.com or self-hosted): <host>/<project>/-/raw/<ref>/<path>
-    return f"https://{host}/{proj}/-/raw/{ref}/{safe}"
-
 
 def _ref_from_version(version: Any) -> str:
     """Best-effort git ref from a LAVA ``system/version`` string.
@@ -681,25 +646,6 @@ def _ref_from_version(version: Any) -> str:
     return m.group(1) if m else v
 
 
-def _fetch_source_file(url: str, timeout: float, cache: dict) -> dict:
-    """GET a raw source file, memoising successful results in ``cache`` (keyed by URL).
-
-    The repo+ref are fixed for the process and a pinned ref is immutable, so each page
-    is fetched from the git host at most once and served from memory thereafter. Errors
-    are not cached, so a transient failure is retried on the next call.
-    """
-    if url in cache:
-        return cache[url]
-    try:
-        resp = requests.get(url, timeout=timeout, headers={"User-Agent": _DOCS_UA})
-    except requests.RequestException as exc:
-        return {"error": f"fetch failed: {exc}", "url": url}
-    if resp.status_code >= 400:
-        return {"error": f"HTTP {resp.status_code} fetching {url}", "url": url}
-    cache[url] = {"url": url, "text": resp.text}
-    return cache[url]
-
-
 def _docs_preamble(config: Config) -> str:
     """Doc-reading preamble prepended to the server instructions — ONLY when the
     deployment declares its LAVA source (LAVA_SOURCE_REPO), because read_lava_docs
@@ -710,13 +656,13 @@ def _docs_preamble(config: Config) -> str:
     ref = config.lava_source_ref or "the deployed version"
     lines = [
         "REQUIRED READING — before building or submitting a job, read LAVA's TECHNICAL "
-        "REFERENCE with the read_lava_docs tool (the server fetches the Markdown source "
-        "for you). Read every page under doc/content/technical-references/ — "
-        "read_lava_docs('doc/content/technical-references/architecture.md'), then "
-        "results.md, state-machine.md, authorization.md, job-metadata.md, and the pages "
-        "under its configuration/, job-definition/ and services/ subdirs — so you "
-        "understand jobs, the deploy/boot/test pipeline, namespaces, and results. Do "
-        "not guess at behaviour you can confirm there.",
+        "REFERENCE with the read_lava_docs tool (it serves the docs from a local mirror "
+        "of the deployed LAVA source). List the section with "
+        "read_lava_docs('doc/content/technical-references/') and read EVERY page it "
+        "returns, so you understand jobs, the deploy/boot/test pipeline, namespaces, and "
+        "results. Do not guess at behaviour you can confirm there. (If read_lava_docs "
+        "says the mirror is not ready, the server is still starting or the LAVA API is "
+        "unreachable — retry shortly.)",
         "The LAVA running behind this instance is built from "
         f"{config.lava_source_repo} at ref {ref}; read_lava_docs serves docs and source "
         "from exactly that, so it matches the running code. (If it reports the version "
@@ -958,62 +904,57 @@ def build_server(config: Config) -> FastMCP:
         """
         return {"tokens": _token_names_only(client().list_remote_artifact_tokens())}
 
-    # Only offer read_lava_docs when the deployment declares its LAVA source — with no
-    # repo there is nothing to fetch, so we neither register the tool nor (see
-    # _docs_preamble) tell the agent to read docs.
+    # Offer read_lava_docs when the deployment declares its LAVA source. The mirror
+    # clones the repo in the background at the deployed ref; the tool only serves once
+    # that clone succeeds (the mirror returns a "not ready yet" error until then), so
+    # the MCP server can start before LAVA and pick the docs up on a later poll.
     if config.lava_source_repo:
-        # per-process caches: each page fetched at most once, and the ref resolved once.
-        _docs_cache: dict[str, dict] = {}
-        _ref_holder: dict[str, str] = {}
 
-        def _docs_ref() -> str:
-            # explicit LAVA_SOURCE_REF wins; otherwise derive it from the LAVA API's
-            # reported version (a tag upstream, or the deployed commit for a
-            # git-describe build). No 'master' fallback: if the version cannot be read
-            # we return "" and refuse to serve, rather than guess a ref that may not
-            # match the deployed code. Only a successful resolution is cached.
-            if config.lava_source_ref:
-                return config.lava_source_ref
-            if _ref_holder.get("ref"):
-                return _ref_holder["ref"]
+        def _mirror_version() -> str:
+            # server-side (no request context in the poller thread): use the pinned
+            # instance. Empty when the API is unreachable -> mirror stays not-ready.
             try:
-                v = client().version()
-                ref = _ref_from_version(v.get("version") if isinstance(v, dict) else v)
+                v = client_from(config, None).version()
+                return v.get("version", "") if isinstance(v, dict) else str(v or "")
             except LavaError:
-                ref = ""
-            if ref:
-                _ref_holder["ref"] = ref
-            return ref
+                return ""
+
+        _source_mirror = LavaSourceMirror(
+            repo=config.lava_source_repo,
+            explicit_ref=config.lava_source_ref,
+            clone_dir=config.lava_source_dir or None,
+            version_fn=_mirror_version,
+            ref_from_version=_ref_from_version,
+            poll_interval=config.lava_source_poll_interval,
+        )
+        _source_mirror.ensure_started()
+        mcp._lava_source_mirror = _source_mirror  # type: ignore[attr-defined]
 
         @mcp.tool()
         def read_lava_docs(
             path: str = "doc/content/technical-references/architecture.md",
         ) -> Any:
-            """Read a LAVA documentation file (Markdown), fetched by the server.
+            """Read LAVA documentation (Markdown) or source from the deployed version.
 
-            The server returns the doc's Markdown source from the deployed LAVA's git
-            repo (LAVA_SOURCE_REPO), at LAVA_SOURCE_REF or — when unset — the ref derived
-            from the LAVA API's reported version (a release tag upstream, or the exact
-            deployed commit for a git-describe build). Results are cached in memory. If
-            the deployed version cannot be read, this returns an error and serves nothing
-            (no guessed ref). LAVA's docs live under `doc/content/` and `path` is
-            repo-relative; the technical reference is `doc/content/technical-references/`
-            (architecture.md, results.md, state-machine.md, authorization.md,
-            job-metadata.md, and the configuration/, job-definition/, services/ subdirs).
-            You can also read non-doc source files this way. Returns {url, text} or
+            The server keeps a local mirror of the deployed LAVA's git repo
+            (LAVA_SOURCE_REPO) checked out at the deployed ref — LAVA_SOURCE_REF, or the
+            ref derived from the LAVA API version (a release tag upstream, the exact
+            commit for a git-describe build) — refreshed periodically. Reads come from
+            that checkout, so they match the running code exactly. If the mirror is not
+            ready yet (server just started, or the LAVA API is unreachable so the version
+            is unknown) this returns an error and serves nothing — retry shortly.
+
+            `path` is repo-relative. LAVA's docs are Markdown under `doc/content/`; the
+            technical reference is the directory `doc/content/technical-references/`.
+            Pass a directory path ending in '/' to LIST the files under it (recursively)
+            — e.g. read_lava_docs('doc/content/technical-references/') to enumerate the
+            whole section — then read each page. You can also read any source file.
+            Returns {path, ref, text} for a file, {dir, ref, files} for a directory, or
             {error}.
             """
-            ref = _docs_ref()
-            if not ref:
-                return {
-                    "error": "cannot read the deployed LAVA version (system/version "
-                    "failed), so docs/source are unavailable — set LAVA_SOURCE_REF to "
-                    "override, or retry once the LAVA API is reachable"
-                }
-            url = _raw_source_url(config.lava_source_repo, ref, path)
-            if url is None:
-                return {"error": f"invalid path: {path!r}"}
-            return _fetch_source_file(url, config.timeout, _docs_cache)
+            if path.rstrip().endswith("/"):
+                return _source_mirror.list(path)
+            return _source_mirror.read(path)
 
     # -- inventory ---------------------------------------------------------
     @mcp.tool()
