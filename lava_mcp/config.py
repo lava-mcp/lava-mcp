@@ -43,6 +43,9 @@ class Config:
     # git repo + ref the deployed LAVA was built from. Surfaced to agents, and read by
     # read_lava_docs to fetch the exact version's docs (reStructuredText under doc/v2/)
     # and let agents read the running code when the docs don't answer a question.
+    # lava_source_ref is optional: when empty the server derives it from the LAVA API's
+    # reported version (a release tag upstream, or the deployed commit for a describe
+    # build). Set it explicitly to override.
     lava_source_repo: str = ""
     lava_source_ref: str = ""
     # serving (hostable mode)

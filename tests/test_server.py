@@ -17,6 +17,7 @@ from lava_mcp.server import (
     _metadata_filters,
     _presented_token,
     _raw_source_url,
+    _ref_from_version,
     _require_owner,
     _require_remote_access_device,
     _require_test_services_device,
@@ -138,6 +139,19 @@ def test_safe_repo_path_blocks_traversal_and_absolute() -> None:
     assert _safe_repo_path("https://evil.example/x") is None
     assert _safe_repo_path("a b.rst") is None  # space -> rejected
     assert _safe_repo_path("") is None
+
+
+def test_ref_from_version_handles_tag_and_git_describe() -> None:
+    # fork: branch-git_describe ending in the commit sha -> use the exact commit
+    assert _ref_from_version("2026.07-qualcomm-2026.07-42-7bca805b9") == "7bca805b9"
+    # git-describe with the conventional g-prefixed sha
+    assert _ref_from_version("2026.07-42-g7bca805b9") == "7bca805b9"
+    # upstream: a plain release tag is used as-is (validation.linaro.org -> 2026.05)
+    assert _ref_from_version("2026.05") == "2026.05"
+    assert _ref_from_version("2025.01") == "2025.01"
+    # unusable input
+    assert _ref_from_version("") == ""
+    assert _ref_from_version(None) == ""
 
 
 def test_raw_source_url_supports_gitlab_and_github() -> None:

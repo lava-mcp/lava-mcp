@@ -665,6 +665,22 @@ def _raw_source_url(repo: str, ref: str, path: str) -> str | None:
     return f"https://{host}/{proj}/-/raw/{ref}/{safe}"
 
 
+def _ref_from_version(version: Any) -> str:
+    """Best-effort git ref from a LAVA ``system/version`` string.
+
+    LAVA reports a git-describe-style version, e.g.
+    ``2026.07-qualcomm-2026.07-42-7bca805b9`` — the trailing ``-<count>-<sha>`` gives
+    the exact deployed commit, which we use as the ref. A plain release like ``2026.07``
+    is returned as-is (a tag). Empty if unusable. The derived ref must exist in the
+    configured LAVA_SOURCE_REPO (i.e. the repo the running LAVA was actually built from).
+    """
+    v = version.strip() if isinstance(version, str) else ""
+    if not v:
+        return ""
+    m = re.search(r"-\d+-g?([0-9a-f]{7,40})$", v)
+    return m.group(1) if m else v
+
+
 def _fetch_source_file(url: str, timeout: float, cache: dict) -> dict:
     """GET a raw source file, memoising successful results in ``cache`` (keyed by URL).
 
@@ -949,25 +965,44 @@ def build_server(config: Config) -> FastMCP:
     # repo there is nothing to fetch, so we neither register the tool nor (see
     # _docs_preamble) tell the agent to read docs.
     if config.lava_source_repo:
-        # per-process cache: each page is fetched from the git host at most once.
+        # per-process caches: each page fetched at most once, and the ref resolved once.
         _docs_cache: dict[str, dict] = {}
+        _ref_holder: dict[str, str] = {}
+
+        def _docs_ref() -> str:
+            # explicit LAVA_SOURCE_REF wins; otherwise derive it from the LAVA API's
+            # reported version (a tag upstream, or the deployed commit sha for a
+            # git-describe build), resolved once and cached.
+            if config.lava_source_ref:
+                return config.lava_source_ref
+            if "ref" not in _ref_holder:
+                try:
+                    v = client().version()
+                    ref = _ref_from_version(
+                        v.get("version") if isinstance(v, dict) else v
+                    )
+                except LavaError:
+                    ref = ""
+                _ref_holder["ref"] = ref or "master"
+            return _ref_holder["ref"]
 
         @mcp.tool()
         def read_lava_docs(path: str = "doc/v2/actions-deploy.rst") -> Any:
             """Read a LAVA documentation file (reStructuredText), fetched by the server.
 
             The server returns the docs' reStructuredText source from the deployed
-            LAVA's git repo (LAVA_SOURCE_REPO at LAVA_SOURCE_REF), cached in memory after
-            the first fetch. LAVA's docs live under `doc/v2/` and `path` is repo-relative.
-            There are ~100 pages — read only what your task needs, chiefly the action
-            reference: 'doc/v2/actions-deploy.rst', 'doc/v2/actions-boot.rst',
-            'doc/v2/actions-test.rst', and per deploy method the fragment
-            'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti). You can
-            also read non-doc source files this way. Returns {url, text} or {error}.
+            LAVA's git repo (LAVA_SOURCE_REPO), at LAVA_SOURCE_REF or — when that is
+            unset — the ref derived from the LAVA API's reported version (a release tag
+            upstream, or the exact deployed commit for a git-describe build). Results are
+            cached in memory after the first fetch. LAVA's docs live under `doc/v2/` and
+            `path` is repo-relative. There are ~100 pages — read only what your task
+            needs, chiefly the action reference: 'doc/v2/actions-deploy.rst',
+            'doc/v2/actions-boot.rst', 'doc/v2/actions-test.rst', and per deploy method
+            the fragment 'doc/v2/actions-deploy-to-<method>.rsti' (e.g. ...-to-tmpfs.rsti).
+            You can also read non-doc source files this way. Returns {url, text} or
+            {error}.
             """
-            url = _raw_source_url(
-                config.lava_source_repo, config.lava_source_ref or "master", path
-            )
+            url = _raw_source_url(config.lava_source_repo, _docs_ref(), path)
             if url is None:
                 return {"error": f"invalid path: {path!r}"}
             return _fetch_source_file(url, config.timeout, _docs_cache)
