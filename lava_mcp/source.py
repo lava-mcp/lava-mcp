@@ -103,12 +103,20 @@ class LavaSourceMirror:
         (gate open), False if the ref could not be resolved yet."""
         ref = self._resolve_ref()
         if not ref:
+            logger.info(
+                "lava source mirror: deployed version/ref not resolvable yet "
+                "(LAVA API unreachable or no version); docs stay unavailable, will retry"
+            )
             return False
         d = str(self.dir)
-        if not (self.dir / ".git").exists():
+        first_clone = not (self.dir / ".git").exists()
+        if first_clone:
             self.dir.parent.mkdir(parents=True, exist_ok=True)
             # partial clone: all commits/trees, blobs fetched lazily on checkout — small,
             # and lets us check out any tag or (short) commit sha.
+            logger.info(
+                "lava source mirror: cloning %s into %s (ref %s)", self.repo, d, ref
+            )
             self._git("clone", "--filter=blob:none", "--no-checkout", self.repo, d)
         self._git("-C", d, "fetch", "--filter=blob:none", "--tags", "--force", "origin")
         with self._lock:
@@ -122,9 +130,23 @@ class LavaSourceMirror:
                 "--detach",
                 ref,
             )
+            was_ready = self._ready
+            prev_ref = self._ref
             self._ref = ref
             self._ready = True
             self._last_error = ""
+        if not was_ready:
+            logger.info(
+                "lava source mirror: ready — %s checked out at ref %s in %s; "
+                "read_lava_docs now serving docs and source",
+                self.repo,
+                ref,
+                d,
+            )
+        elif prev_ref != ref:
+            logger.info(
+                "lava source mirror: ref updated %s -> %s", prev_ref, ref
+            )
         return True
 
     # -- state -------------------------------------------------------------
