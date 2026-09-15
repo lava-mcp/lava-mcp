@@ -663,10 +663,13 @@ def _docs_preamble(config: Config) -> str:
         "results. Do not guess at behaviour you can confirm there. (If read_lava_docs "
         "says the mirror is not ready, the server is still starting or the LAVA API is "
         "unreachable — retry shortly.)",
-        "The LAVA running behind this instance is built from "
-        f"{config.lava_source_repo} at ref {ref}; read_lava_docs serves docs and source "
-        "from exactly that, so it matches the running code. (If it reports the version "
-        "can't be read, docs are unavailable — do not guess.)",
+        "You can also READ THE DEPLOYED LAVA SOURCE with the same read_lava_docs tool — "
+        "it mirrors the exact build behind this instance "
+        f"({config.lava_source_repo} at ref {ref}), so when the docs don't settle a "
+        "question you can check the code itself (e.g. read_lava_docs('lava_dispatcher/"
+        "actions/deploy/'), or a specific module) and be certain it matches what is "
+        "running. Docs and source are served only once the mirror has checked out; if "
+        "read_lava_docs reports it is not ready, retry shortly.",
     ]
     return "\n\n".join(lines) + "\n\n"
 
