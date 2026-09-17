@@ -72,7 +72,13 @@ read_lava_docs('doc/content/technical-references/results.md') # read one page
 read_lava_docs('lava_dispatcher/actions/deploy/')            # read the deployed source
 ```
 
-When the source is available, the server's instructions tell agents to read the
-technical reference before building a job, and to consult the deployed source when the
-docs don't settle a question about a deploy/boot method — so the answer matches exactly
-what is running.
+## Read selectively
+
+The technical reference is large — dozens of pages, one per boot method, one per deploy
+method, and one per service. The server's instructions deliberately tell agents to read
+it **selectively**, not wholesale: read the few core pages that explain the model
+(architecture, `job-definition/job.md`, `results.md`) if unfamiliar with LAVA, then list
+the section and read only the page(s) for the deploy/boot method(s) a given job actually
+uses. Reading the whole tree would burn a large amount of context for little benefit.
+Source is consulted on demand, only when the docs don't settle a question — so the
+answer matches exactly what is running.

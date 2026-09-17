@@ -655,14 +655,20 @@ def _docs_preamble(config: Config) -> str:
         return ""
     ref = config.lava_source_ref or "the deployed version"
     lines = [
-        "REQUIRED READING — before building or submitting a job, read LAVA's TECHNICAL "
-        "REFERENCE with the read_lava_docs tool (it serves the docs from a local mirror "
-        "of the deployed LAVA source). List the section with "
-        "read_lava_docs('doc/content/technical-references/') and read EVERY page it "
-        "returns, so you understand jobs, the deploy/boot/test pipeline, namespaces, and "
-        "results. Do not guess at behaviour you can confirm there. (If read_lava_docs "
-        "says the mirror is not ready, the server is still starting or the LAVA API is "
-        "unreachable — retry shortly.)",
+        "DOCUMENTATION IS AVAILABLE — the read_lava_docs tool serves LAVA's docs (and "
+        "source) from a local mirror of the deployed build, so you can confirm behaviour "
+        "rather than guess it. Read SELECTIVELY, not wholesale: the technical reference "
+        "has dozens of pages (one per boot method, one per deploy method, one per "
+        "service), and reading them all wastes your context. Instead: if unfamiliar with "
+        "LAVA, read the few core pages that explain the model "
+        "(read_lava_docs('doc/content/technical-references/architecture.md'), then "
+        "job-definition/job.md and results.md); then, before a job that deploys, LIST the "
+        "section (read_lava_docs('doc/content/technical-references/')) and read ONLY the "
+        "page(s) for the specific deploy/boot method(s) your job uses (e.g. "
+        "deploy/to-fastboot.md, boot/method-u-boot.md). Do not guess at a method's "
+        "parameters when its page is one read away. (If read_lava_docs says the mirror is "
+        "not ready, the server is still starting or the LAVA API is unreachable — retry "
+        "shortly.)",
         "You can also READ THE DEPLOYED LAVA SOURCE with the same read_lava_docs tool — "
         "it mirrors the exact build behind this instance "
         f"({config.lava_source_repo} at ref {ref}), so when the docs don't settle a "
@@ -951,9 +957,10 @@ def build_server(config: Config) -> FastMCP:
             technical reference is the directory `doc/content/technical-references/`.
             Pass a directory path ending in '/' to LIST the files under it (recursively)
             — e.g. read_lava_docs('doc/content/technical-references/') to enumerate the
-            whole section — then read each page. You can also read any source file.
-            Returns {path, ref, text} for a file, {dir, ref, files} for a directory, or
-            {error}.
+            section — then read only the pages you need. The section is large (a page per
+            boot method, deploy method and service); read SELECTIVELY (the method(s) your
+            job uses), not the whole tree. You can also read any source file. Returns
+            {path, ref, text} for a file, {dir, ref, files} for a directory, or {error}.
             """
             if path.rstrip().endswith("/"):
                 return _source_mirror.list(path)

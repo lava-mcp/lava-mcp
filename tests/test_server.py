@@ -93,22 +93,25 @@ def test_presented_token_accepts_raw_and_bearer_prefixes() -> None:
 def test_docs_preamble_only_when_source_repo_set() -> None:
     # no source repo -> nothing to read -> no preamble (never tell the agent to read)
     assert _docs_preamble(Config(url="https://lava.example.com")) == ""
-    # with a source repo -> required reading points at read_lava_docs + action reference
+    # with a source repo -> the preamble advertises read_lava_docs and steers agents to
+    # read SELECTIVELY (not the whole tree) to avoid burning context.
     cfg = Config(
         url="https://lava.example.com",
         lava_source_repo="https://gitlab.com/lava/lava.git",
         lava_source_ref="2026.07",
     )
     pre = _docs_preamble(cfg)
-    assert pre.startswith("REQUIRED READING")
+    assert pre.startswith("DOCUMENTATION IS AVAILABLE")
     assert "read_lava_docs" in pre
     assert "doc/content/technical-references/" in pre
+    assert "SELECTIVELY" in pre  # must not tell the agent to read every page
+    assert "read EVERY page" not in pre
     assert "https://gitlab.com/lava/lava.git" in pre and "2026.07" in pre
     # prepended to the served instructions only when configured
-    assert build_server(cfg).instructions.startswith("REQUIRED READING")
+    assert build_server(cfg).instructions.startswith("DOCUMENTATION IS AVAILABLE")
     assert not build_server(
         Config(url="https://lava.example.com")
-    ).instructions.startswith("REQUIRED READING")
+    ).instructions.startswith("DOCUMENTATION IS AVAILABLE")
 
 
 def test_read_lava_docs_registered_only_with_source_repo() -> None:
