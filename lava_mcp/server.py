@@ -674,8 +674,11 @@ def _docs_preamble(config: Config) -> str:
         f"({config.lava_source_repo} at ref {ref}), so when the docs don't settle a "
         "question you can check the code itself (e.g. read_lava_docs('lava_dispatcher/"
         "actions/deploy/'), or a specific module) and be certain it matches what is "
-        "running. Docs and source are served only once the mirror has checked out; if "
-        "read_lava_docs reports it is not ready, retry shortly.",
+        "running. Source is even larger than the docs, so reading it also consumes your "
+        "context — reach for it only when the docs don't answer, and read the specific "
+        "module in question, not whole directories. Docs and source are served only once "
+        "the mirror has checked out; if read_lava_docs reports it is not ready, retry "
+        "shortly.",
     ]
     return "\n\n".join(lines) + "\n\n"
 

@@ -80,5 +80,8 @@ it **selectively**, not wholesale: read the few core pages that explain the mode
 (architecture, `job-definition/job.md`, `results.md`) if unfamiliar with LAVA, then list
 the section and read only the page(s) for the deploy/boot method(s) a given job actually
 uses. Reading the whole tree would burn a large amount of context for little benefit.
-Source is consulted on demand, only when the docs don't settle a question — so the
-answer matches exactly what is running.
+
+Reading **source** costs context too — the source tree is even larger than the docs — so
+it is consulted on demand, only when the docs don't settle a question, and then a
+specific module rather than whole directories. Either way the answer matches exactly what
+is running.
