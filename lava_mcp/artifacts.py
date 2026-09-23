@@ -92,7 +92,18 @@ class Artifact:
 
 
 class ArtifactError(RuntimeError):
-    """Raised for admission failures (too large, disk full, bad state)."""
+    """Raised for admission failures (too large, disk full, bad state).
+
+    Carries a machine-readable ``reason`` and a ``details`` dict (concrete byte
+    figures) so a rejection can be reported to the agent actionably, not just as prose.
+    """
+
+    def __init__(
+        self, message: str, *, reason: str = "", details: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.details = details or {}
 
 
 class ArtifactStore:
@@ -166,25 +177,43 @@ class ArtifactStore:
                 pass
 
     # -- disk accounting ---------------------------------------------------
-    def _free_after(self, extra_bytes: int) -> tuple[int, int]:
-        """(free-after-extra, total) bytes on the store's volume."""
+    def _headroom_bytes(self) -> int:
+        """Largest number of bytes that may currently be stored before the upload
+        would cross the free-space floor (>= 0). Internal — not reported to agents."""
         usage = shutil.disk_usage(self.root)
-        return usage.free - max(extra_bytes, 0), usage.total
+        floor = int(self.min_free_fraction * usage.total)
+        return max(usage.free - floor, 0)
 
     def check_admission(self, size_bytes: int) -> None:
-        """Raise ``ArtifactError`` if an upload of ``size_bytes`` is not allowed."""
+        """Raise ``ArtifactError`` if an upload of ``size_bytes`` is not allowed.
+
+        The raised error carries ``reason`` and ``details`` — how much was needed and,
+        for a disk refusal, how much could currently be accepted — so the caller can
+        tell the agent exactly why, and by how much, it was refused without exposing the
+        host's overall disk capacity.
+        """
         if size_bytes < 0:
-            raise ArtifactError("size must be non-negative")
+            raise ArtifactError("size must be non-negative", reason="negative_size")
         if size_bytes > self.max_bytes:
             raise ArtifactError(
                 f"artifact too large: {size_bytes} bytes exceeds the "
-                f"{self.max_bytes}-byte per-artifact cap"
+                f"{self.max_bytes}-byte per-artifact cap",
+                reason="exceeds_cap",
+                details={
+                    "needed_bytes": size_bytes,
+                    "max_artifact_bytes": self.max_bytes,
+                },
             )
-        free_after, total = self._free_after(size_bytes)
-        if total and free_after < self.min_free_fraction * total:
+        headroom = self._headroom_bytes()
+        if size_bytes > headroom:
             raise ArtifactError(
                 "insufficient disk: this upload would leave less than "
-                f"{int(self.min_free_fraction * 100)}% free on the artifact volume"
+                f"{int(self.min_free_fraction * 100)}% free on the artifact volume",
+                reason="insufficient_disk",
+                details={
+                    "needed_bytes": size_bytes,
+                    "acceptable_bytes_now": headroom,
+                },
             )
 
     # -- lifecycle ---------------------------------------------------------
@@ -203,7 +232,22 @@ class ArtifactStore:
         ``size_bytes`` so the agent is not told to start a doomed multi-GB upload.
         """
         self.reap()
-        self.check_admission(size_bytes)
+        try:
+            self.check_admission(size_bytes)
+        except ArtifactError as exc:
+            usage = shutil.disk_usage(self.root)
+            logger.warning(
+                "artifact: reservation REJECTED owner=%s filename=%r "
+                "declared_bytes=%d reason=%s: %s (volume free=%d total=%d)",
+                owner,
+                safe_filename(filename),
+                size_bytes,
+                exc.reason,
+                exc,
+                usage.free,
+                usage.total,
+            )
+            raise
         ttl = self.ttl_default if ttl_seconds is None else ttl_seconds
         ttl = max(1.0, min(ttl, self.ttl_max))
         artifact_id = secrets.token_urlsafe(16)
@@ -222,6 +266,14 @@ class ArtifactStore:
         with self._lock:
             self._artifacts[artifact_id] = art
             self._persist(art)
+        logger.info(
+            "artifact: reserved id=%s owner=%s filename=%s declared_bytes=%d ttl_s=%d",
+            artifact_id,
+            owner,
+            art.filename,
+            size_bytes,
+            int(ttl),
+        )
         return art, token
 
     def get(self, artifact_id: str) -> Artifact | None:
@@ -253,9 +305,29 @@ class ArtifactStore:
         breach the partial file is discarded and the artifact left awaiting upload.
         """
         if art.state != "await_upload":
-            raise ArtifactError("artifact already uploaded")
+            raise ArtifactError("artifact already uploaded", reason="bad_state")
         if content_length is not None:
-            self.check_admission(content_length)
+            try:
+                self.check_admission(content_length)
+            except ArtifactError as exc:
+                logger.warning(
+                    "artifact: upload REJECTED id=%s owner=%s filename=%s "
+                    "content_length=%d reason=%s: %s",
+                    art.artifact_id,
+                    art.owner,
+                    art.filename,
+                    content_length,
+                    exc.reason,
+                    exc,
+                )
+                raise
+        logger.info(
+            "artifact: upload started id=%s owner=%s filename=%s content_length=%s",
+            art.artifact_id,
+            art.owner,
+            art.filename,
+            content_length,
+        )
         part = self._part_path(art.artifact_id)
         written = 0
         checkpoint = 0
@@ -266,18 +338,44 @@ class ArtifactStore:
                         continue
                     written += len(chunk)
                     if written > self.max_bytes:
-                        raise ArtifactError("upload exceeds the per-artifact cap")
+                        raise ArtifactError(
+                            "upload exceeds the per-artifact cap",
+                            reason="exceeds_cap",
+                            details={
+                                "received_bytes": written,
+                                "max_artifact_bytes": self.max_bytes,
+                            },
+                        )
                     # re-check free space periodically for streams with no/dishonest
                     # Content-Length, so a runaway upload cannot fill the disk.
                     if written - checkpoint >= 64 * 1024 * 1024:
                         checkpoint = written
-                        free_after, total = self._free_after(0)
-                        if total and free_after < self.min_free_fraction * total:
-                            raise ArtifactError("disk floor reached during upload")
+                        if self._headroom_bytes() <= 0:
+                            raise ArtifactError(
+                                "disk floor reached during upload",
+                                reason="insufficient_disk",
+                                details={"received_bytes": written},
+                            )
                     fh.write(chunk)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(part, self._blob_path(art.artifact_id))
+        except ArtifactError as exc:
+            logger.warning(
+                "artifact: upload REJECTED id=%s owner=%s filename=%s "
+                "received_bytes=%d reason=%s: %s",
+                art.artifact_id,
+                art.owner,
+                art.filename,
+                written,
+                exc.reason,
+                exc,
+            )
+            try:
+                part.unlink()
+            except FileNotFoundError:
+                pass
+            raise
         except BaseException:
             try:
                 part.unlink()
@@ -288,6 +386,13 @@ class ArtifactStore:
             art.state = "stored"
             art.size_actual = written
             self._persist(art)
+        logger.info(
+            "artifact: stored id=%s owner=%s filename=%s bytes=%d",
+            art.artifact_id,
+            art.owner,
+            art.filename,
+            written,
+        )
         return art
 
     def store_bytes(self, art: Artifact, data: bytes) -> Artifact:

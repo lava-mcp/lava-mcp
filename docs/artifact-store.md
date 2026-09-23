@@ -32,11 +32,22 @@ the DUT, so this is a **capability store**, not a dispatcher-authenticated one:
   time against a stored SHA-256 hash) guard every artifact;
 - retention is TTL-bounded (default and max ~6h) so a leaked token dies quickly;
 - uploads are refused when they would exceed the per-artifact cap (default 6 GB) or push
-  the disk below the free-space floor (default 10% free);
+  the disk below the free-space floor (default 10% free) — checked up front against the
+  declared `size_bytes`, again against `Content-Length` at the start of the `PUT`, and
+  re-checked every 64 MB during the stream so a missing/dishonest length can't fill the
+  disk; on a breach the partial file is discarded;
 - an optional `bind_job_id` makes the artifact stop serving (HTTP 410) once that job
   finishes;
 - metadata persists as a JSON sidecar beside the blob, so the store survives a restart;
   a background reaper deletes expired artifacts.
+
+The store does **not** advertise disk capacity to agents. A refusal is *actionable* but
+minimal: it returns a `reason` (`exceeds_cap` / `insufficient_disk`) and, for a disk
+refusal, `acceptable_bytes_now` — the largest upload that would fit right now — so the
+caller can resize without being shown the host's overall free/total disk. Operators get
+the full picture in the server log: every reservation, upload start, `stored` (with owner
+and byte count), and every rejection (with owner, reason, and volume free/total) is
+logged under the `lava_mcp` logger.
 
 ## Three ways to consume an artifact
 

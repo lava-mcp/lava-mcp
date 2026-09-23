@@ -752,7 +752,10 @@ def _register_artifact_routes(
                 art, request.stream(), int(length) if length is not None else None
             )
         except ArtifactError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=413)
+            return JSONResponse(
+                {"error": str(exc), "reason": exc.reason, **exc.details},
+                status_code=413,
+            )
         return JSONResponse(
             {"stored": True, "artifact_id": art.artifact_id, "size": art.size_actual}
         )
@@ -1772,7 +1775,10 @@ def build_server(config: Config) -> FastMCP:
                 the slot; you then upload with the returned `put_command` (an HTTP PUT),
                 which keeps multi-GB files out of the model context. Pass `size_bytes`
                 (the file's real size) so the store can pre-check its per-artifact cap
-                and disk floor before you start pushing.
+                and disk floor before you start pushing. If it can't be admitted the
+                result is an `error` with a `reason` and, for a disk refusal,
+                `acceptable_bytes_now` — the largest upload that would fit right now, so
+                you can resize or wait for space to free up.
 
                 The artifact is fetchable at `get_url` for up to a few hours (`ttl_max`),
                 guarded by a temporary bearer token returned as `token`. That same token
@@ -1813,7 +1819,9 @@ def build_server(config: Config) -> FastMCP:
                         bind_job_id=bind_job_id,
                     )
                 except ArtifactError as exc:
-                    return {"error": str(exc)}
+                    # surface the concrete figures (how much was needed vs. what could
+                    # be accepted) so the agent can resize, not just a prose refusal.
+                    return {"error": str(exc), "reason": exc.reason, **exc.details}
                 # register the secret as a LAVA named token so the deploy block can
                 # reference the NAME (LAVA substitutes the value at download time).
                 token_name = f"lava-mcp-artifact-{art.artifact_id}"

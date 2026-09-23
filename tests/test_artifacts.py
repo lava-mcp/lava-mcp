@@ -62,11 +62,40 @@ def test_create_then_stream_and_read_roundtrip(tmp_path) -> None:
 
 def test_admission_rejects_oversize_and_disk_floor(tmp_path) -> None:
     store = make_store(tmp_path, max_bytes=10)
-    with pytest.raises(ArtifactError):
+    with pytest.raises(ArtifactError) as cap:
         store.create("big.bin", 20, "alice")  # exceeds per-artifact cap
+    assert cap.value.reason == "exceeds_cap"
+    assert cap.value.details["needed_bytes"] == 20
+    assert cap.value.details["max_artifact_bytes"] == 10
+
     floor = make_store(tmp_path, min_free_fraction=1.0)
-    with pytest.raises(ArtifactError):
+    with pytest.raises(ArtifactError) as disk:
         floor.create("x.bin", 1, "alice")  # can never leave 100% free
+    assert disk.value.reason == "insufficient_disk"
+    # the refusal tells the agent how much could be accepted right now (not the
+    # volume total) so it can resize; with a 100% floor that is zero.
+    assert disk.value.details["needed_bytes"] == 1
+    assert disk.value.details["acceptable_bytes_now"] == 0
+    assert "total_bytes" not in disk.value.details  # capacity is NOT exposed
+
+
+def test_upload_logs_who_what_and_why(tmp_path, caplog) -> None:
+    store = make_store(tmp_path)
+    with caplog.at_level("INFO", logger="lava_mcp"):
+        art, _ = store.create("boot.img", 5, "alice")
+        asyncio.run(_drain(store, art, [b"hello"], length=5))
+    text = caplog.text
+    assert "reserved" in text and "owner=alice" in text and "boot.img" in text
+    assert "stored" in text and "bytes=5" in text
+
+    caplog.clear()
+    small = make_store(tmp_path, max_bytes=4)
+    with caplog.at_level("WARNING", logger="lava_mcp"):
+        with pytest.raises(ArtifactError):
+            store_art, _ = small.create("f.bin", 0, "bob")
+            asyncio.run(_drain(small, store_art, [b"toolong"], length=None))
+    assert "REJECTED" in caplog.text and "owner=bob" in caplog.text
+    assert "reason=exceeds_cap" in caplog.text
 
 
 def test_stream_over_cap_aborts_and_keeps_await_state(tmp_path) -> None:
