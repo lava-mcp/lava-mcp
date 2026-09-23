@@ -93,6 +93,12 @@ needed); the user ends the session by exiting the shell.
 token-guarded artifacts (with your header/token) into the job before the console step.
 See the [artifact store](artifact-store.md).
 
+## Debug-board (TAC) control through the same proxy
+
+The proxy also bridges the lab's TAC REST service (pytactl), so a console session can
+drive the board's debug board — quick methods and pins, e.g. hold the power key — with
+`tac_info` / `tac_command`. See [tac-control.md](tac-control.md).
+
 ## Tools
 
 `check_serial_console_support`, `open_console_session`, `check_console_ready`,

@@ -16,6 +16,12 @@ The ser2net endpoint can arrive two ways:
     board session, where the port is per-board and only known once LAVA schedules the
     job. The proxy waits (read-only, no console yet) until the endpoint is delivered.
 
+The proxy also bridges the lab's TAC REST API (the pytactl service that drives the
+board's debug board / Alpaca: power, pins such as the power key, boot modes). Like
+ser2net it lives on the dispatcher network, out of reach of the MCP server, so the
+gateway sends a TAC control line over the same reverse tunnel and the proxy performs
+that one HTTP request and writes the response back. Only TAC routes are accepted.
+
 Dependency-free (stdlib asyncio). Configured via environment (LAVA writes the job's
 environment into the compose .env):
 
@@ -24,13 +30,23 @@ environment into the compose .env):
   CONSOLE_READY_SENTINEL        string that unlocks writes (must match the job's echo)
   CONSOLE_INPUT_CHAR_DELAY      per-character gap (s) when writing user input to the
                                 board, so a slow UART doesn't drop chars (default 0.05)
+  TAC_API_URL                   base URL of the lab's TAC REST service (default
+                                http://tac-api:80; empty disables TAC requests)
+  SESSION_PRIVATE_KEY_B64       the session key (also used to dial out); TAC control
+                                lines must carry a token derived from it
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import os
+import re
 import sys
+import urllib.error
+import urllib.request
 
 LISTEN_PORT = int(os.environ.get("CONSOLE_LISTEN_PORT", "2323"))
 SENTINEL = os.environ.get(
@@ -46,6 +62,37 @@ INPUT_CHAR_DELAY = float(os.environ.get("CONSOLE_INPUT_CHAR_DELAY", "0.05"))
 # runtime (must match lava_mcp.gateway.CONSOLE_SETPORT_PREFIX). Followed by
 # "<host> <port>\n".
 SETPORT_PREFIX = b"\x00LAVA-MCP-SETPORT "
+
+# Control line the gateway pushes to make one TAC REST request (must match
+# lava_mcp.gateway.CONSOLE_TAC_PREFIX). Followed by "<token> <METHOD> <path>\n" (see
+# tac_control_token); the proxy answers "<status>\n<body>" and closes. Status 0 means
+# the proxy refused or could not make the request (the body says why).
+TAC_PREFIX = b"\x00LAVA-MCP-TAC "
+TAC_API_URL = os.environ.get("TAC_API_URL", "http://tac-api:80").rstrip("/")
+TAC_TIMEOUT = float(os.environ.get("TAC_TIMEOUT", "30"))
+# The pytactl REST routes a session may use: read the board, run a quick method
+# (powerOn, bootToEDL, ...) or set a pin by command name or pin id. Nothing else on
+# the TAC service is reachable through the proxy.
+TAC_GET_RE = re.compile(r"^/[A-Za-z0-9_-]+(/(quick|command|pin)(/[A-Za-z0-9_]+)?)?$")
+TAC_PUT_RE = re.compile(
+    r"^/[A-Za-z0-9_-]+(/quick/[A-Za-z0-9_]+|/(command|pin)/[A-Za-z0-9_]+\?value=[01])$"
+)
+
+
+def tac_control_token(private_key_pem: bytes) -> str:
+    """Token a TAC control line must carry (must match lava_mcp.gateway).
+
+    Derived from the session's private key, which the proxy holds (to dial out) and
+    the gateway minted, but a human given attach_console access to the relay never
+    sees. So only the gateway can drive the TAC: it resolves the job's own board's
+    serial server-side, and a human on the relay cannot aim requests at another board.
+    """
+    return hashlib.sha256(b"lava-mcp-tac:" + private_key_pem).hexdigest()
+
+
+# no session key (relay-only, no gateway) -> no token -> TAC requests are refused
+_key_b64 = os.environ.get("SESSION_PRIVATE_KEY_B64", "")
+TAC_TOKEN = tac_control_token(base64.b64decode(_key_b64)) if _key_b64 else None
 
 # When the sentinel is empty there is no boot to gate on (e.g. a board session, where
 # nothing drives the console), so the console is writable from the start.
@@ -117,6 +164,8 @@ async def console_reader() -> None:
 async def _read_control_prefix(reader: asyncio.StreamReader) -> bytes:
     """Read up to len(SETPORT_PREFIX) bytes with a short deadline.
 
+    SETPORT_PREFIX is the longest control prefix, so this is enough to recognise any
+    control line (a TAC line's head then also carries the start of its request).
     A control connection sends the prefix immediately; a console watcher usually sends
     nothing (it only reads) or a few keystrokes. We accumulate until we have enough to
     compare, or a brief timeout elapses, so a fragmented control write is not
@@ -136,11 +185,58 @@ async def _read_control_prefix(reader: asyncio.StreamReader) -> bytes:
     return head
 
 
+def tac_request(method: str, path: str) -> tuple[int, bytes]:
+    """Perform one TAC REST request (blocking); return (status, body).
+
+    Status 0 means the request was refused or could not be made; the body explains.
+    Only the pytactl routes in TAC_GET_RE / TAC_PUT_RE are forwarded.
+    """
+    if not TAC_API_URL:
+        return 0, b"TAC bridge disabled (TAC_API_URL is empty)"
+    allowed = {"GET": TAC_GET_RE, "PUT": TAC_PUT_RE}.get(method)
+    if allowed is None or not allowed.match(path):
+        return 0, f"refused TAC request {method} {path!r}".encode()
+    req = urllib.request.Request(TAC_API_URL + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=TAC_TIMEOUT) as resp:
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+    except (urllib.error.URLError, OSError) as exc:
+        return 0, f"TAC service unreachable at {TAC_API_URL}: {exc}".encode()
+
+
+async def _handle_tac(line: bytes, writer: asyncio.StreamWriter) -> None:
+    """Answer a TAC control line ("<token> <METHOD> <path>") with
+    "<status>\\n<body>"."""
+    parts = line.decode(errors="replace").split()
+    if len(parts) != 3:
+        status, body = 0, b"malformed TAC control line"
+    elif TAC_TOKEN is None or not hmac.compare_digest(parts[0], TAC_TOKEN):
+        status, body = 0, b"TAC control line not authorised"
+        log("refused an unauthorised TAC control line")
+    else:
+        status, body = await asyncio.to_thread(tac_request, parts[1], parts[2])
+        log(f"TAC {parts[1]} {parts[2]} -> {status}")
+    writer.write(f"{status}\n".encode() + body)
+    await writer.drain()
+
+
 async def handle_watcher(
     reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 ) -> None:
     peer = writer.get_extra_info("peername")
     head = await _read_control_prefix(reader)
+    if head.startswith(TAC_PREFIX):
+        # a TAC REST request relayed from the gateway, not a watcher
+        line = head[len(TAC_PREFIX) :]
+        if b"\n" not in line:
+            line += await reader.readline()
+        try:
+            await _handle_tac(line.split(b"\n", 1)[0], writer)
+        finally:
+            writer.close()
+        return
     if head == SETPORT_PREFIX:
         # runtime endpoint delivery, not a real watcher: read "<host> <port>\n"
         rest = (await reader.readline()).decode(errors="replace").split()

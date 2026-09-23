@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from .artifacts import ArtifactError, ArtifactStore
 from .client import LavaClient, LavaError, client_from, ser2net_endpoint
 from .config import Config
-from .gateway import Gateway
+from .gateway import Gateway, GatewayError
 from .jobs import build_downloads_action, build_interactive_job, download_label
 from .source import LavaSourceMirror
 
@@ -188,6 +188,14 @@ kinds, for different needs:
    action, plus the `environment:` values to set. After submitting, poll
    check_console_ready(job_id) until ready:true (instead of reading logs), then call
    attach_console.
+
+   Debug-board (TAC) control. In labs whose boards sit behind a TAC REST service
+   (pytactl driving an Alpaca/debug board), tac_info and tac_command reach below
+   LAVA's device commands: run a quick method (powerOn, bootToEDL, ...), set a pin, or
+   hold one (e.g. the power key for ~20 s to force a PMIC reset of a frozen board).
+   They ride the same console proxy, so they need a console session or a board session
+   opened with console=true; the TAC serial comes from the assigned board, so only
+   your own board can be driven.
 
 Serving your own files to LAVA: when you have a build product (kernel, rootfs, DTB,
 script) you want a job to deploy/flash or a booted device to fetch, but no URL to host
@@ -515,6 +523,48 @@ def _discover_console_target(client: LavaClient, job_id: int | str | None) -> di
     if endpoint is None:
         return {"status": "unsupported", "command": cmd, "hostname": host}
     return {"status": "ok", "host": endpoint[0], "port": endpoint[1], "hostname": host}
+
+
+def _discover_tac_serial(client: LavaClient, job_id: int | str | None) -> dict:
+    """Resolve the TAC serial of the board a job actually landed on.
+
+    Like the ser2net port, the TAC (debug board) serial belongs to the physical board,
+    so it is read from the assigned device's dictionary once LAVA has scheduled the
+    job. It is never taken from the agent: a session can only drive its own board.
+
+      {"status": "pending"}                        job not scheduled / device unknown
+      {"status": "unsupported", "hostname": ...}   board is not driven via a TAC service
+      {"status": "ok", "serial": ..., "hostname": ...}
+    """
+    if job_id is None:
+        return {"status": "pending"}
+    try:
+        job = client.get_job(job_id)
+        host = job.get("actual_device") if isinstance(job, dict) else None
+        if not host:
+            return {"status": "pending"}
+        serial = client.tac_serial(host)
+    except Exception:  # noqa: BLE001 - discovery is best-effort
+        return {"status": "pending"}
+    if not serial:
+        return {"status": "unsupported", "hostname": host}
+    return {"status": "ok", "serial": serial, "hostname": host}
+
+
+_TAC_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+# longest pin hold tac_command performs in one call (a PMIC reset needs ~10-20 s)
+TAC_MAX_HOLD_SECONDS = 60
+
+
+def tac_command_path(serial: str, name: str, value: int | None = None) -> str:
+    """The TAC REST path for a quick method (value None) or a pin command (0/1)."""
+    if not _TAC_NAME_RE.match(name or ""):
+        raise ValueError(f"invalid TAC command name {name!r}")
+    if value is None:
+        return f"/{serial}/quick/{name}"
+    if value not in (0, 1):
+        raise ValueError("TAC pin value must be 0 or 1")
+    return f"/{serial}/command/{name}?value={value}"
 
 
 def _unproxyable_console_note(res: dict) -> str:
@@ -1742,6 +1792,161 @@ def build_server(config: Config) -> FastMCP:
             session.revoke_human_keys()
             session.status = "closed"
             return {"closed": True, "session_id": session_id}
+
+        # -- board debug-board (TAC) control via the console proxy -------------
+        async def _tac_session(session_id: str, user: str) -> Any:
+            """The console session (with its TAC serial resolved) that TAC requests
+            for ``session_id`` go through, or an error dict. Accepts a console session
+            or a board session opened with console=true."""
+            session = gateway.manager.get(session_id)
+            if session is None:
+                return {"error": f"unknown session {session_id}"}
+            _require_owner(session, user)
+            if session.kind == "container":
+                paired = session.console_session_id
+                session = gateway.manager.get(paired) if paired else None
+                if session is None:
+                    return {
+                        "error": "TAC control rides the serial-console proxy: open the "
+                        "board session with console=true (or use a console session)"
+                    }
+            await asyncio.to_thread(gateway.ensure_started)
+            if session.status != "connected":
+                return {
+                    "error": f"console proxy for {session_id} has not connected yet; "
+                    "retry once the job is running"
+                }
+            if session.tac_serial is None:
+                res = await asyncio.to_thread(
+                    _discover_tac_serial, client(), session.job_id
+                )
+                if res["status"] == "unsupported":
+                    return {
+                        "error": f"board {res['hostname']} is not driven through a TAC "
+                        "service (no `tac-api ... --serial` in its power commands)"
+                    }
+                if res["status"] != "ok":
+                    return {"error": "the job's board is not known yet; retry shortly"}
+                session.tac_serial = res["serial"]
+            return session
+
+        async def _tac_call(session: Any, method: str, path: str) -> dict:
+            try:
+                return await gateway.tac_request(session.session_id, method, path)
+            except GatewayError as exc:
+                return {"status": 0, "body": str(exc)}
+
+        @mcp.tool()
+        async def tac_info(session_id: str) -> Any:
+            """List what the board's debug board (TAC/Alpaca) can do, and pin state.
+
+            For labs whose boards sit behind a TAC REST service (pytactl): the debug
+            board drives power, boot-mode straps and buttons such as the power key.
+            Pass a console session, or a board session opened with console=true — TAC
+            requests ride the same Test Services proxy as the serial console, which is
+            on the lab network where the TAC service lives. The board's TAC serial is
+            resolved from the assigned board's device dictionary, so you only ever
+            reach your own board. Returns the quick methods (powerOn, powerOff,
+            bootToEDL, ...) and the pins tac_command can set (kpd_pwr, ...) with their
+            current values.
+            """
+            user = require_user(config.http_allow_users)
+            session = await _tac_session(session_id, user)
+            if isinstance(session, dict):
+                return session
+            serial = session.tac_serial
+            out: dict[str, Any] = {"session_id": session_id, "tac_serial": serial}
+            quick = await _tac_call(session, "GET", f"/{serial}/quick")
+            board = await _tac_call(session, "GET", f"/{serial}")
+            try:
+                if quick["status"] != 200 or board["status"] != 200:
+                    raise ValueError
+                out["quick_methods"] = sorted(yaml.safe_load(quick["body"]) or {})
+                pins = (yaml.safe_load(board["body"]) or {}).get("pins") or {}
+                # pins without a port are on a bus the debug board does not drive
+                out["pins"] = {
+                    p["command"]: p.get("value")
+                    for p in pins.values()
+                    if isinstance(p, dict) and p.get("port") and p.get("command")
+                }
+            except (ValueError, AttributeError, yaml.YAMLError):
+                out["error"] = "unexpected reply from the TAC service"
+                out["replies"] = {
+                    "quick": {**quick, "body": quick["body"][:1000]},
+                    "board": {**board, "body": board["body"][:1000]},
+                }
+            return out
+
+        @mcp.tool()
+        async def tac_command(
+            session_id: str,
+            name: str,
+            value: int | None = None,
+            hold_seconds: float | None = None,
+        ) -> Any:
+            """Drive the board's debug board (TAC/Alpaca): a quick method or a pin.
+
+            - quick method (value and hold_seconds unset): e.g. powerOn, powerOff,
+              reset, bootToEDL, bootToUEFI — see tac_info.
+            - pin command with value 1 (assert) or 0 (release): e.g. kpd_pwr.
+            - pin press with hold_seconds: asserts the pin, holds it, then releases it
+              (always released, even if the hold is interrupted); up to
+              TAC_MAX_HOLD_SECONDS. E.g. hold kpd_pwr ~20 s to make the PMIC reset a
+              frozen SoC — with qcom_scm.download_mode set that lands a Qualcomm board
+              in crashdump mode.
+
+            Same session rules as tac_info. This reaches below LAVA's device commands
+            (run_device_command runs the dictionary's power commands; this sets
+            individual pins), so leave the board powered and in a sane state for the
+            job to finish.
+            """
+            user = require_user(config.http_allow_users)
+            if not _TAC_NAME_RE.match(name or ""):
+                return {"error": f"invalid TAC command name {name!r}"}
+            if value not in (None, 0, 1):
+                return {"error": "value must be 0 or 1"}
+            if hold_seconds is not None:
+                if value is not None:
+                    return {"error": "pass either value or hold_seconds, not both"}
+                if not 0 < hold_seconds <= TAC_MAX_HOLD_SECONDS:
+                    return {
+                        "error": f"hold_seconds must be in (0, {TAC_MAX_HOLD_SECONDS}]"
+                    }
+            session = await _tac_session(session_id, user)
+            if isinstance(session, dict):
+                return session
+            serial = session.tac_serial
+            if hold_seconds is None:
+                path = tac_command_path(serial, name, value)
+                res = await _tac_call(session, "PUT", path)
+                return {
+                    "name": name,
+                    "value": value,
+                    "ok": res["status"] == 200,
+                    "status": res["status"],
+                    "response": res["body"][:2000],
+                }
+            press = await _tac_call(session, "PUT", tac_command_path(serial, name, 1))
+            if press["status"] != 200:
+                return {
+                    "name": name,
+                    "ok": False,
+                    "status": press["status"],
+                    "response": press["body"][:2000],
+                }
+            try:
+                await asyncio.sleep(hold_seconds)
+            finally:
+                release = await _tac_call(
+                    session, "PUT", tac_command_path(serial, name, 0)
+                )
+            return {
+                "name": name,
+                "held_seconds": hold_seconds,
+                "ok": release["status"] == 200,
+                "status": release["status"],
+                "response": release["body"][:2000],
+            }
 
     if artifacts is not None:
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import ipaddress
 import logging
 import socket
@@ -44,6 +45,24 @@ _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 # board container reports it at runtime and the gateway relays it here. Prefixed with a
 # NUL + magic so the proxy can tell it apart from console watcher input.
 CONSOLE_SETPORT_PREFIX = b"\x00LAVA-MCP-SETPORT "
+
+# Control line the gateway sends to a console proxy to make one request to the lab's
+# TAC REST API (the debug-board service driving power, pins and boot modes), which is
+# only reachable from the dispatcher network the proxy runs on. Followed by
+# "<token> <METHOD> <path>\n"; the proxy replies "<status>\n<body>" and closes the
+# connection. The token (tac_control_token) proves the line comes from the gateway: a
+# human given attach_console access to the same relay must not drive the TAC, which
+# could reach other boards on the lab's TAC service.
+CONSOLE_TAC_PREFIX = b"\x00LAVA-MCP-TAC "
+
+
+def tac_control_token(private_key_pem: bytes) -> str:
+    """Token a TAC control line carries, derived from the session's private key.
+
+    The console proxy holds that key (it dials out with it) and derives the same token;
+    humans attached to the relay never see it. Must match the proxy's derivation.
+    """
+    return hashlib.sha256(b"lava-mcp-tac:" + private_key_pem).hexdigest()
 
 
 class GatewayError(RuntimeError):
@@ -148,6 +167,10 @@ class BoardSession:
     # (host, port) of the ser2net endpoint this console session should relay, discovered
     # from the board container at runtime and pushed to the proxy via set_console_target
     console_target: tuple[str, str] | None = None
+    # serial of the board's TAC (debug board) on the lab's TAC REST service, resolved
+    # from the assigned board's device dictionary; the server only sends TAC requests
+    # for this serial, never one supplied by the agent
+    tac_serial: str | None = None
     status: str = "pending"  # pending -> connected -> closed
     created: float = field(default_factory=time.time)
     # short-lived public keys authorised for human access, mapped to expiry (epoch s)
@@ -569,6 +592,57 @@ class Gateway:
             session.session_id,
         )
         return True
+
+    async def tac_request(
+        self, session_id: str, method: str, path: str, timeout: float = 45
+    ) -> dict[str, Any]:
+        """Make one request to the lab TAC REST API through a console session's proxy.
+
+        Like ``set_console_target`` this rides the proxy's own reverse tunnel: it opens
+        the session's loopback reverse port and sends a ``TAC`` control line; the proxy
+        performs the HTTP request against the TAC service on the dispatcher network and
+        replies ``<status>\\n<body>``. Returns ``{"status": int, "body": str}`` where
+        status 0 means the proxy refused or could not make the request.
+        """
+        session = self.manager.get(session_id)
+        if session is None:
+            raise GatewayError(f"unknown session {session_id}")
+        if session.kind != "console":
+            raise GatewayError(f"session {session_id} is not a console session")
+        if session.status != "connected":
+            raise GatewayError(f"session {session_id} is not connected yet")
+        return await self._submit(self._tac_request(session, method, path, timeout))
+
+    async def _tac_request(
+        self, session: BoardSession, method: str, path: str, timeout: float
+    ) -> dict[str, Any]:
+        token = tac_control_token(session.private_key.encode())
+        line = CONSOLE_TAC_PREFIX + f"{token} {method} {path}\n".encode()
+        try:
+            reader, writer = await asyncio.open_connection(
+                "127.0.0.1", session.reverse_port
+            )
+            writer.write(line)
+            await writer.drain()
+            reply = await asyncio.wait_for(reader.read(), timeout=timeout)
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+        except (OSError, asyncio.TimeoutError) as exc:
+            raise GatewayError(
+                f"TAC request via session {session.session_id} failed: {exc}"
+            )
+        head, _, body = reply.partition(b"\n")
+        try:
+            status = int(head.decode(errors="replace").strip() or "0")
+        except ValueError:
+            # not a TAC reply (an older proxy without the bridge takes the line as
+            # console input and never answers, which ends in the timeout above)
+            status, body = 0, reply
+        logger.info(
+            "gateway: TAC %s %s via %s -> %s", method, path, session.session_id, status
+        )
+        return {"status": status, "body": body.decode(errors="replace")}
 
     async def run(
         self, session_id: str, command: str, timeout: float = 120

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
@@ -147,6 +148,14 @@ class LavaClient:
             cmd = commands.get("connect")
         return cmd if isinstance(cmd, str) else None
 
+    def tac_serial(self, hostname: str) -> str | None:
+        """Serial of the device's TAC (debug board) on the lab TAC REST service, from
+        its rendered dictionary's power commands (see ``tac_serial_from_dictionary``).
+        None if the board is not driven through a TAC service."""
+        return tac_serial_from_dictionary(
+            self.get_device_dictionary(hostname, render=True)
+        )
+
     def console_endpoint(self, hostname: str) -> tuple[str, str] | None:
         """(host, port) of the device's serial console IF it is a proxyable ser2net
         endpoint (see ``ser2net_endpoint``), else None."""
@@ -246,6 +255,38 @@ def ser2net_endpoint(cmd: str) -> tuple[str, str] | None:
     parts = (cmd or "").split()
     if len(parts) >= 3 and parts[0] in ("telnet", "nc", "ncat") and "ser2net" in cmd:
         return parts[1], parts[2]
+    return None
+
+
+# A power command that goes through the lab's TAC REST client, e.g.
+# "/usr/local/bin/tac-api.py --serial NNPMP28T002L --command powerOff".
+_TAC_SERIAL_RE = re.compile(r"\btac-api\S*\s.*?--serial[=\s]+(\S+)")
+
+
+def tac_serial_from_dictionary(dict_text: str) -> str | None:
+    """The TAC serial a rendered device dictionary drives the board with, else None.
+
+    Labs that front their debug boards (Alpaca/TAC) with a pytactl REST service call it
+    from the device's power commands (``tac-api.py --serial <serial> --command ...``).
+    That serial is the board's key on the TAC service, so it identifies which board a
+    TAC request may touch. Looks at the power/reset commands and the user commands.
+    """
+    data = yaml.safe_load(dict_text) or {}
+    commands = data.get("commands", {}) if isinstance(data, dict) else {}
+    if not isinstance(commands, dict):
+        return None
+    candidates: list[Any] = [
+        commands.get(name)
+        for name in ("hard_reset", "power_on", "power_off", "soft_reboot")
+    ]
+    users = commands.get("users") or {}
+    if isinstance(users, dict):
+        candidates += [u.get("do") for u in users.values() if isinstance(u, dict)]
+    for cmd in candidates:
+        for line in cmd if isinstance(cmd, list) else [cmd]:
+            m = _TAC_SERIAL_RE.search(line) if isinstance(line, str) else None
+            if m:
+                return m.group(1).strip("'\"")
     return None
 
 

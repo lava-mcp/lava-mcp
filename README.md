@@ -33,6 +33,9 @@ Each feature is documented on its own page:
   `run_in_session`, `attach_shell`, and the device-command power/recovery relay.
 - **[Serial console](docs/serial-console.md)** — the board's own UART via a ser2net
   proxy: boot/kernel logs and a live console, with or without a deploy+boot job.
+- **[Debug-board (TAC) control](docs/tac-control.md)** — drive the board's debug board
+  through the lab's pytactl REST service: quick methods (`powerOn`, `bootToEDL`, ...)
+  and individual pins, e.g. holding the power key to reset a frozen board.
 - **[Artifact store](docs/artifact-store.md)** — upload a build product the server hosts
   temporarily; LAVA (or a booted device / container) fetches it back, with the secret
   kept out of the job via LAVA remote-artifact tokens.
@@ -65,6 +68,9 @@ Interactive board sessions (hosted gateway mode): `open_board_session`, `run_in_
 
 Serial console (hosted gateway mode): `check_serial_console_support`,
 `open_console_session`, `check_console_ready`, `attach_console`, `close_console_session`.
+
+Debug-board control (hosted gateway mode, via the console proxy): `tac_info`,
+`tac_command`.
 
 Artifact store (hosted mode, when enabled): `create_artifact_upload`, `list_artifacts`,
 `delete_artifact`.

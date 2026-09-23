@@ -15,7 +15,9 @@ import yaml
 
 from lava_mcp.config import Config
 from lava_mcp.gateway import (
+    CONSOLE_TAC_PREFIX,
     Gateway,
+    GatewayError,
     SessionManager,
     _GatewaySSHServer,
     forwarded_client_ip,
@@ -23,6 +25,7 @@ from lava_mcp.gateway import (
     generate_keypair,
     ip_allowed,
     parse_networks,
+    tac_control_token,
 )
 from lava_mcp.jobs import (
     build_downloads_action,
@@ -459,6 +462,58 @@ def test_console_tools_registered_when_gateway_enabled() -> None:
         "close_console_session",
         "check_serial_console_support",
     } <= names
+
+
+def test_tac_tools_registered_only_with_gateway() -> None:
+    assert {"tac_info", "tac_command"} <= _tool_names(
+        Config(url="https://x", gateway_enabled=True)
+    )
+    assert not {"tac_info", "tac_command"} & _tool_names(Config(url="https://x"))
+
+
+def test_tac_request_rejects_non_console_and_unconnected_sessions() -> None:
+    gw = Gateway(Config(url="https://lava.example.com"))
+    board = gw.manager.create(device_type="lemans-evk")
+    console = gw.manager.create(device_type="lemans-evk", kind="console")
+    with pytest.raises(GatewayError, match="not a console session"):
+        asyncio.run(gw.tac_request(board.session_id, "GET", "/S/quick"))
+    with pytest.raises(GatewayError, match="not connected"):
+        asyncio.run(gw.tac_request(console.session_id, "GET", "/S/quick"))
+
+
+def test_tac_request_line_and_reply_over_reverse_port() -> None:
+    """_tac_request writes one TAC control line to the session's loopback reverse
+    port (where the proxy's tunnel lands) and parses "<status>\\n<body>"."""
+    gw = Gateway(Config(url="https://lava.example.com"))
+    session = gw.manager.create(device_type="lemans-evk", kind="console")
+    received: list[bytes] = []
+
+    async def scenario(reply: bytes) -> dict:
+        async def fake_proxy(reader: Any, writer: Any) -> None:
+            received.append(await reader.readline())
+            writer.write(reply)
+            await writer.drain()
+            writer.close()
+
+        server = await asyncio.start_server(
+            fake_proxy, "127.0.0.1", session.reverse_port
+        )
+        async with server:
+            return await gw._tac_request(
+                session, "PUT", "/NNPMP28T002L/command/kpd_pwr?value=1", 5
+            )
+
+    ok = asyncio.run(scenario(b'200\n{"C3": {"value": 1}}'))
+    token = tac_control_token(session.private_key.encode())
+    assert received[0] == (
+        CONSOLE_TAC_PREFIX
+        + f"{token} PUT /NNPMP28T002L/command/kpd_pwr?value=1\n".encode()
+    )
+    assert ok == {"status": 200, "body": '{"C3": {"value": 1}}'}
+    refused = asyncio.run(scenario(b"0\nrefused TAC request"))
+    assert refused == {"status": 0, "body": "refused TAC request"}
+    # anything that is not a "<status>\n" reply is reported as a failure
+    assert asyncio.run(scenario(b"console noise"))["status"] == 0
 
 
 def test_gateway_integration_security_posture() -> None:

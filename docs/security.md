@@ -61,6 +61,12 @@ job). The **serial console** (`attach_console`) is the same forward to the conso
 - **Device gates** — interactive sessions only run on devices tagged
   `allow-remote-access`; the serial console additionally requires `allow_test_services`
   in the device dict.
+- **TAC bridge scoped to the session's board** — [TAC control](tac-control.md) requests
+  ride the console relay. The console proxy only acts on a TAC control line carrying a
+  token derived from the session key (which humans on the relay never hold), and only
+  for pytactl routes; the gateway only sends requests for the TAC serial it resolved
+  from the assigned board's device dictionary. So neither an agent nor a human attached
+  to the console can drive another board on the lab's TAC service.
 
 These are covered by unit tests plus a live-asyncssh integration test
 (`tests/test_gateway.py`) that confirms the agent key can reverse-forward its loopback

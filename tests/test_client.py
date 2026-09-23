@@ -9,8 +9,34 @@ from lava_mcp.client import (
     client_from,
     device_dict_allows_test_services,
     ser2net_endpoint,
+    tac_serial_from_dictionary,
 )
 from lava_mcp.config import Config
+
+
+def test_tac_serial_from_dictionary() -> None:
+    # rendered dictionary of a board powered through the lab's TAC REST client
+    rendered = (
+        "commands:\n"
+        "  hard_reset:\n"
+        "  - /usr/local/bin/tac-api.py --serial NNPMP28T002L --command powerOff\n"
+        "  - sleep 2\n"
+        "  - /usr/local/bin/tac-api.py --serial NNPMP28T002L --command powerOn\n"
+    )
+    assert tac_serial_from_dictionary(rendered) == "NNPMP28T002L"
+    # found in a user command too, and with --serial=<x>
+    users = (
+        "commands:\n"
+        "  hard_reset: pdu-reboot 3\n"
+        "  users:\n"
+        "    wake_up:\n"
+        "      do: ['tac-api.py --pin kpd_pwr --serial=AB12 --pin-value 1']\n"
+    )
+    assert tac_serial_from_dictionary(users) == "AB12"
+    # a PDU-powered board, or no commands at all -> not driven via a TAC service
+    assert tac_serial_from_dictionary("commands:\n  hard_reset: pdu 1 reboot\n") is None
+    assert tac_serial_from_dictionary("actions: {}\n") is None
+    assert tac_serial_from_dictionary("") is None
 
 
 def test_ser2net_endpoint_parses_only_proxyable_ser2net_commands() -> None:

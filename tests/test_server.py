@@ -9,6 +9,7 @@ from lava_mcp.server import (
     _WS_NOT_CONFIGURED,
     _artifact_base_url,
     _discover_console_target,
+    _discover_tac_serial,
     _docs_preamble,
     _enforce_user_allowlist,
     _lava_username,
@@ -28,8 +29,51 @@ from lava_mcp.server import (
     build_shell_ssh_config,
     console_ready_in_logs,
     deploy_urls_from_definition,
+    tac_command_path,
     url_match_score,
 )
+
+
+class _FakeTacClient:
+    """Client stub for _discover_tac_serial: a job's assigned device and its TAC
+    serial (None for a board not powered through a TAC service)."""
+
+    def __init__(self, actual_device: str | None, serial: str | None) -> None:
+        self._actual_device = actual_device
+        self._serial = serial
+
+    def get_job(self, job_id: object) -> dict:
+        return {"actual_device": self._actual_device}
+
+    def tac_serial(self, hostname: str) -> str | None:
+        return self._serial
+
+
+def test_discover_tac_serial_pending_unsupported_and_ok() -> None:
+    assert _discover_tac_serial(_FakeTacClient("rb8-01", "X"), None) == {
+        "status": "pending"
+    }
+    assert _discover_tac_serial(_FakeTacClient(None, None), 7) == {"status": "pending"}
+    assert _discover_tac_serial(_FakeTacClient("rb8-01", None), 7) == {
+        "status": "unsupported",
+        "hostname": "rb8-01",
+    }
+    assert _discover_tac_serial(_FakeTacClient("rb8-01", "NNPMP28T002L"), 7) == {
+        "status": "ok",
+        "serial": "NNPMP28T002L",
+        "hostname": "rb8-01",
+    }
+
+
+def test_tac_command_path_quick_methods_and_pins() -> None:
+    assert tac_command_path("S1", "powerOff") == "/S1/quick/powerOff"
+    assert tac_command_path("S1", "kpd_pwr", 1) == "/S1/command/kpd_pwr?value=1"
+    assert tac_command_path("S1", "kpd_pwr", 0) == "/S1/command/kpd_pwr?value=0"
+    for bad_name in ("", "../x", "kpd pwr", "a/b", "x?value=1"):
+        with pytest.raises(ValueError):
+            tac_command_path("S1", bad_name)
+    with pytest.raises(ValueError):
+        tac_command_path("S1", "kpd_pwr", 2)
 
 
 class _FakeConsoleClient:

@@ -10,8 +10,9 @@
 # Config comes from the job/device `environment`, which LAVA writes to a .env at the
 # repo root; env_file loads it into the container (see docker-compose.yml for why the
 # explicit path is needed). Vars: SER2NET_HOST/PORT, CONSOLE_LISTEN_PORT,
-# CONSOLE_READY_SENTINEL, and GATEWAY_HOST/GATEWAY_WS_URL/SESSION_ID/REVERSE_PORT/
-# SESSION_PRIVATE_KEY_B64 (dial-out). Missing values fall back to script defaults.
+# CONSOLE_READY_SENTINEL, GATEWAY_HOST/GATEWAY_WS_URL/SESSION_ID/REVERSE_PORT/
+# SESSION_PRIVATE_KEY_B64 (dial-out) and TAC_API_URL (TAC bridge, see
+# docs/tac-control.md). Missing values fall back to script defaults.
 services:
   ser2net-proxy:
     image: ghcr.io/lava-mcp/lava-mcp/ser2net-proxy:latest
