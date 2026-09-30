@@ -10,6 +10,10 @@ services:
   lava-mcp:
     build: .
     restart: unless-stopped
+    # Run an init (tini) as PID 1 to reap zombies. The source mirror shells out to
+    # git, whose orphaned helper processes would otherwise pile up as `git <defunct>`.
+    # The image already sets a tini entrypoint; this covers runtimes that override it.
+    init: true
     environment:
       # Pin this server to one LAVA instance; clients then only send X-Lava-Token.
       # Leave LAVA_URL empty in .env to be multi-tenant (clients send X-Lava-Url too).

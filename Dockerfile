@@ -7,8 +7,11 @@
 FROM python:3.13-slim
 
 # git + ca-certificates: read_lava_docs mirrors the deployed LAVA source with git.
+# tini: a proper init as PID 1 to reap zombies. git spawns helper processes
+# (git-remote-https, pack/index) that can be orphaned onto PID 1; without an init
+# reaping them, they accumulate as `git <defunct>` on every mirror poll.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates \
+    && apt-get install -y --no-install-recommends git ca-certificates tini \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -21,4 +24,5 @@ ENV LAVA_MCP_TRANSPORT=streamable-http \
     LAVA_MCP_PORT=8000
 EXPOSE 8000
 
-ENTRYPOINT ["lava-mcp"]
+# tini as PID 1 forwards signals and reaps orphaned git helper processes.
+ENTRYPOINT ["tini", "--", "lava-mcp"]
