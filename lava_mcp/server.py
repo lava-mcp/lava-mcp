@@ -197,7 +197,11 @@ deploy action can carry the token NAME (LAVA swaps in the secret at download, ke
 it out of the job) — the tool hands back a deploy_block and a full example snippet. It
 also returns a fetch_command (plain curl) you can run from a test action ON a booted
 device with working networking to land the file on the device itself. Artifacts
-auto-expire within hours; set the job's `visibility: personal` when it references one.
+auto-expire within hours. Referencing an artifact by its URL and remote-artifact token
+NAME is NOT a secret (LAVA substitutes the name for the real token at download, so the
+job text leaks nothing), so it needs no visibility change; set `visibility: personal`
+only if a job carries a RAW secret inline — e.g. the artifact's token value because it
+could not be registered as a named token (the tool's deploy_note says when that happens).
 (Only offered in hosted mode.) For a BOARD SESSION, pass such artifacts as
 open_board_session(downloads=[{"url","headers"}]) (open_console_session takes downloads
 too): the server adds the LAVA download action so LAVA fetches them with your
@@ -1268,6 +1272,8 @@ def build_server(config: Config) -> FastMCP:
             session = gateway.manager.create(device_type=device_type, owner=user)
             if console_session is not None:
                 session.console_session_id = console_session.session_id
+            # The interactive job is always personal: it embeds the per-session SSH
+            # private key in its text (see build_interactive_job).
             job_yaml = build_interactive_job(
                 config,
                 session,
@@ -1793,8 +1799,10 @@ def build_server(config: Config) -> FastMCP:
                 - LAVA deploy download (the dispatcher fetches + flashes it): paste
                   `deploy_block` under the image/url in your deploy action — it uses the
                   token NAME, keeping the secret out of the job (see `example_job_snippet`
-                  for exactly where it goes). ALSO set the job's top-level
-                  `visibility: personal` (see `visibility_note`).
+                  for exactly where it goes). The URL + token name are NOT secret, so the
+                  job needs no visibility change — UNLESS the name could not be registered
+                  and `deploy_block` carries the raw token inline, in which case set
+                  `visibility: personal` (see `deploy_note`/`visibility_note`).
                 - onto a BOOTED device that has working networking: run `fetch_command`
                   (plain curl, token inline) from a test action that executes on the DUT
                   — that lands the file on the device's own filesystem (e.g. push a test
@@ -1893,8 +1901,15 @@ def build_server(config: Config) -> FastMCP:
                         "on the target."
                     ),
                     "visibility_note": (
-                        "Set `visibility: personal` at the top of any job that "
-                        "references this artifact, so its URL is not publicly readable."
+                        "The artifact URL and the remote-artifact token NAME are not "
+                        "secret (LAVA substitutes the name for the real token at "
+                        "download), so a job referencing it by name needs NO visibility "
+                        "change."
+                        if lava_token_registered
+                        else "A LAVA named token could not be registered, so "
+                        "deploy_block carries the RAW token inline — set "
+                        "`visibility: personal` at the top of the job so the token is "
+                        "not publicly readable."
                     ),
                     "lava_token_registered": lava_token_registered,
                 }

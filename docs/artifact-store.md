@@ -69,9 +69,11 @@ your deploy action (see `example_job_snippet` for placement):
           Authorization: lava-mcp-artifact-<id>   # token NAME; LAVA substitutes the secret
 ```
 
-Also set the job's top-level `visibility: personal` so its URL is not publicly readable.
-(If LAVA token registration fails, `deploy_block` carries the raw token inline instead —
-the tool says so — so `visibility: personal` matters even more.)
+The URL and the token **name** are not secret (LAVA substitutes the name for the real
+token at download time), so a job referencing the artifact this way needs **no**
+visibility change. The exception is when a LAVA named token could not be registered: the
+tool then puts the **raw** token inline in `deploy_block` and says so — in that case set
+the job's top-level `visibility: personal` so the token isn't publicly readable.
 
 ### 2. Onto a booted device with networking
 

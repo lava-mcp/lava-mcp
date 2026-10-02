@@ -47,6 +47,11 @@ def build_interactive_job(
     can apply the auth header / substitute a remote-artifact token) stages them into the
     board container at ``/lava-downloads`` — the container itself cannot fetch a
     token-guarded artifact.
+
+    The job is always ``visibility: personal``: it embeds the per-session SSH private
+    key in its definition (the container uses it to dial the gateway), and a job's text
+    is readable by other LAVA users, so an interactive job always carries a secret and
+    must not be public.
     """
     gateway_host = config.gateway_advertise_host or config.host
 
@@ -89,6 +94,7 @@ def build_interactive_job(
     job: dict[str, Any] = {
         "device_type": device_type,
         "job_name": f"lava-mcp interactive {session.session_id}",
+        # always personal: the per-session SSH private key lives in the job text.
         "visibility": "personal",
         "timeouts": {
             "job": {"minutes": timeout_minutes},

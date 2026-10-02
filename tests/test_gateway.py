@@ -232,6 +232,14 @@ def test_build_interactive_job_tag_gate_can_be_disabled() -> None:
     assert "tags" not in job
 
 
+def test_build_interactive_job_is_always_personal() -> None:
+    # the job embeds the per-session SSH private key, so it must never be public
+    cfg = Config(url="https://lava.example.com")
+    session = SessionManager().create(device_type="qcs6490")
+    job = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
+    assert job["visibility"] == "personal"
+
+
 def test_interactive_assets_match_contract() -> None:
     root = Path(__file__).resolve().parents[1]
     testdef = yaml.safe_load((root / "interactive" / "ssh-gateway.yaml").read_text())
