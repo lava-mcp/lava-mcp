@@ -232,12 +232,17 @@ def test_build_interactive_job_tag_gate_can_be_disabled() -> None:
     assert "tags" not in job
 
 
-def test_build_interactive_job_is_always_personal() -> None:
-    # the job embeds the per-session SSH private key, so it must never be public
+def test_build_interactive_job_defaults_personal_but_can_opt_out() -> None:
+    # the job embeds the per-session SSH private key, so personal is the default; a
+    # caller may explicitly opt out, which drops the visibility key (instance default).
     cfg = Config(url="https://lava.example.com")
     session = SessionManager().create(device_type="qcs6490")
-    job = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
-    assert job["visibility"] == "personal"
+    default = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
+    assert default["visibility"] == "personal"
+    public = yaml.safe_load(
+        build_interactive_job(cfg, session, device_type="qcs6490", private=False)
+    )
+    assert "visibility" not in public
 
 
 def test_interactive_assets_match_contract() -> None:

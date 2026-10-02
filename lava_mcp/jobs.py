@@ -31,6 +31,7 @@ def build_interactive_job(
     timeout_minutes: int = 60,
     console_session: BoardSession | None = None,
     downloads: list[dict[str, Any]] | None = None,
+    private: bool = True,
 ) -> str:
     """Return the YAML job definition for an interactive session on ``device_type``.
 
@@ -48,10 +49,12 @@ def build_interactive_job(
     board container at ``/lava-downloads`` — the container itself cannot fetch a
     token-guarded artifact.
 
-    The job is always ``visibility: personal``: it embeds the per-session SSH private
-    key in its definition (the container uses it to dial the gateway), and a job's text
-    is readable by other LAVA users, so an interactive job always carries a secret and
-    must not be public.
+    ``private`` (default True) sets ``visibility: personal``. The job embeds the
+    per-session SSH private key in its definition (the container uses it to dial the
+    gateway) and a job's text is readable by other LAVA users, so personal is strongly
+    recommended; it is the default but not forced — a caller may pass ``private=False``
+    to leave the job at the instance default visibility, accepting that the key is then
+    exposed.
     """
     gateway_host = config.gateway_advertise_host or config.host
 
@@ -94,8 +97,6 @@ def build_interactive_job(
     job: dict[str, Any] = {
         "device_type": device_type,
         "job_name": f"lava-mcp interactive {session.session_id}",
-        # always personal: the per-session SSH private key lives in the job text.
-        "visibility": "personal",
         "timeouts": {
             "job": {"minutes": timeout_minutes},
             "action": {"minutes": timeout_minutes},
@@ -103,6 +104,10 @@ def build_interactive_job(
         },
         "priority": "medium",
     }
+    # Strongly recommended personal (the per-session SSH private key is in the job
+    # text), the default — but a caller may opt out.
+    if private:
+        job["visibility"] = "personal"
 
     console_present = console_session is not None and bool(config.gateway_ws_url)
     # LAVA forbids the reserved 'common' namespace (an unnamespaced action's default)

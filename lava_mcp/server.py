@@ -1220,6 +1220,7 @@ def build_server(config: Config) -> FastMCP:
             timeout_minutes: int = 60,
             console: bool = False,
             downloads: list[dict] | None = None,
+            private: bool = True,
         ) -> Any:
             """Open a shell in a container running *next to* the board (not on it).
 
@@ -1253,6 +1254,12 @@ def build_server(config: Config) -> FastMCP:
             from create_artifact_upload — pass its deploy_block url + headers) into a
             board session; the container can't fetch it directly. Files land under
             /lava-downloads by filename (the result lists the expected paths).
+
+            `private` (default True) submits the job with `visibility: personal`. The
+            job embeds this session's SSH private key in its text, which other LAVA users
+            could read in a public job, so keeping it personal is STRONGLY recommended.
+            It is not forced: pass private=False only if you deliberately want the job at
+            the instance's default visibility and accept that the key is then exposed.
             """
             user = require_user(config.http_allow_users)
             if not config.gateway_ws_url:
@@ -1272,8 +1279,8 @@ def build_server(config: Config) -> FastMCP:
             session = gateway.manager.create(device_type=device_type, owner=user)
             if console_session is not None:
                 session.console_session_id = console_session.session_id
-            # The interactive job is always personal: it embeds the per-session SSH
-            # private key in its text (see build_interactive_job).
+            # Default to personal (strongly recommended — the per-session SSH key is in
+            # the job text), but honour an explicit private=False opt-out.
             job_yaml = build_interactive_job(
                 config,
                 session,
@@ -1283,6 +1290,7 @@ def build_server(config: Config) -> FastMCP:
                 timeout_minutes=timeout_minutes,
                 console_session=console_session,
                 downloads=downloads,
+                private=private,
             )
             result = client().submit_job(job_yaml)
             job_ids = result.get("job_ids") if isinstance(result, dict) else None
@@ -1294,6 +1302,14 @@ def build_server(config: Config) -> FastMCP:
             )
             view = session.public_view()
             view["connected"] = connected
+            view["visibility"] = "personal" if private else "default"
+            if not private:
+                view["visibility_warning"] = (
+                    "Submitted at the instance default visibility (private=False). This "
+                    "job's text contains the session SSH private key — other LAVA users "
+                    "may be able to read it. Re-open with private=True (the default) to "
+                    "keep it personal."
+                )
             if console_session is not None:
                 view["console_session_id"] = console_session.session_id
                 view["console_note"] = await _wire_console(
