@@ -73,6 +73,14 @@ guess blind. If this server offers the read_lava_docs tool (the required-reading
 above says so when it does), also read the action reference for the deploy/boot methods
 you use. Either way, validate_job before submitting.
 
+Targeting a device: by default the scheduler picks any free board of `device_type`. To
+pin a job to ONE exact board, add a top-level `device: <hostname>` (single-node jobs
+only; the hostname must be of the requested `device_type`, and the scheduler then uses
+only that board with no fallback). Use `worker: <hostname>` to restrict to boards on one
+worker. Do NOT abuse `tags:` for this — tags select a capability SUBSET of a device_type
+(the board must carry every listed tag), not a named device; `device:` is the correct,
+direct way to reach a specific board.
+
 Job lifecycle tools: validate_job (check without submitting) -> submit_job (returns the
 job id) -> poll get_job for state and health, and read get_job_logs / get_job_results;
 cancel_job stops a queued or running job; list_jobs / get_job / get_job_definition

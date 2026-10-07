@@ -32,6 +32,17 @@ want:
   reference for the deploy/boot methods you use.
 - Always `validate_job` before submitting.
 
+### Targeting a specific device
+
+By default the scheduler runs the job on any free board of the `device_type`. To pin it
+to one exact board, add a top-level `device: <hostname>` (single-node jobs only; the
+hostname must belong to the requested `device_type`, and the scheduler then uses only
+that board with no fallback). `worker: <hostname>` restricts to boards on one worker.
+
+`tags:` is **not** the way to reach a named device — tags select a capability *subset*
+of a device_type (the board must carry every listed tag). Use `device:` to target a
+specific board.
+
 ### Lifecycle
 
 `validate_job` (check without submitting) → `submit_job` (returns the job id) → poll
