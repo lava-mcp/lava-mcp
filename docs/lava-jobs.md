@@ -32,6 +32,14 @@ want:
   reference for the deploy/boot methods you use.
 - Always `validate_job` before submitting.
 
+### Priority — default to low
+
+Default every job you build to `priority: low`. The lab is shared with regular CI, which
+runs at the default (medium) priority; a low-priority agent job queues **behind** CI
+rather than displacing a team's pipeline. Raise it (medium/high) only for a genuinely
+time-critical, human-driven need, understanding it will jump ahead of CI. The
+interactive-session jobs this server builds are already submitted at low priority.
+
 ### Targeting a specific device
 
 By default the scheduler runs the job on any free board of the `device_type`. To pin it

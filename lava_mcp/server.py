@@ -73,6 +73,13 @@ guess blind. If this server offers the read_lava_docs tool (the required-reading
 above says so when it does), also read the action reference for the deploy/boot methods
 you use. Either way, validate_job before submitting.
 
+Job priority: DEFAULT to `priority: low` on every job you build. Agentic LAVA use shares
+the lab with regular CI, and CI jobs run at the default (medium) priority — a low-priority
+agent job queues behind them rather than displacing a team's pipeline. Only raise it
+(medium/high) when a human has a genuinely time-critical need and you understand it will
+jump the queue ahead of CI. (The interactive-session jobs this server builds are already
+submitted at low priority.)
+
 Targeting a device: by default the scheduler picks any free board of `device_type`. To
 pin a job to ONE exact board, add a top-level `device: <hostname>` (single-node jobs
 only; the hostname must be of the requested `device_type`, and the scheduler then uses

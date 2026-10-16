@@ -102,7 +102,8 @@ def build_interactive_job(
             "action": {"minutes": timeout_minutes},
             "connection": {"minutes": 5},
         },
-        "priority": "medium",
+        # low priority so agentic use queues behind regular CI rather than displacing it.
+        "priority": "low",
     }
     # Strongly recommended personal (the per-session SSH private key is in the job
     # text), the default — but a caller may opt out.
