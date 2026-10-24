@@ -32,13 +32,13 @@ want:
   reference for the deploy/boot methods you use.
 - Always `validate_job` before submitting.
 
-### Priority — default to low
+### Priority
 
-Default every job you build to `priority: low`. The lab is shared with regular CI, which
-runs at the default (medium) priority; a low-priority agent job queues **behind** CI
-rather than displacing a team's pipeline. Raise it (medium/high) only for a genuinely
-time-critical, human-driven need, understanding it will jump ahead of CI. The
-interactive-session jobs this server builds are already submitted at low priority.
+A normal deploy/boot/test job runs to completion on its own, so the default (medium)
+`priority` is fine — leave it unless a human asks otherwise. Only the
+[interactive-session](board-sessions.md) jobs this server builds are submitted at
+`priority: low`, because they hold a board for an entire manual session; low priority
+keeps that agentic board-holding from displacing regular CI. That is automatic.
 
 ### Targeting a specific device
 

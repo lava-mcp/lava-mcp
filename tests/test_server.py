@@ -208,6 +208,19 @@ def test_read_tools_always_present() -> None:
     assert "list_remote_artifact_tokens" in names
 
 
+def test_bug_report_tools_present_by_default_and_gateable() -> None:
+    # on by default, even in read-only (reporting a bug is not a LAVA write)
+    assert {"report_bug", "list_bug_reports", "resolve_bug_report"} <= tool_names(
+        read_only=True
+    )
+    disabled = asyncio.run(
+        build_server(
+            Config(url="https://lava.example.com", bug_reports_enabled=False)
+        ).list_tools()
+    )
+    assert "report_bug" not in {t.name for t in disabled}
+
+
 def test_write_tools_present_when_not_read_only() -> None:
     names = tool_names(read_only=False)
     assert {"submit_job", "cancel_job", "resubmit_job"} <= names

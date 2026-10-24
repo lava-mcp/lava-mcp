@@ -39,6 +39,9 @@ Each feature is documented on its own page:
 - **[LAVA docs & source mirror](docs/lava-source-docs.md)** — `read_lava_docs` serves
   the deployed LAVA's documentation and source from a local git mirror at the exact
   deployed ref.
+- **[Bug-report inbox](docs/bug-reports.md)** — agents file short, text-only reports
+  about lava-mcp/LAVA issues (attributed to their LAVA user) for an operator to review;
+  strictly size-bounded so it never eats disk.
 
 Supporting docs:
 
@@ -70,6 +73,9 @@ Artifact store (hosted mode, when enabled): `create_artifact_upload`, `list_arti
 `delete_artifact`.
 
 LAVA docs & source (when `LAVA_SOURCE_REPO` is set): `read_lava_docs`.
+
+Bug reports (on by default): `report_bug`; operators also get `list_bug_reports`,
+`resolve_bug_report`.
 
 ## Test
 

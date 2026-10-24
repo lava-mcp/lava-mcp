@@ -23,6 +23,7 @@ logger = logging.getLogger("lava_mcp")
 from mcp.server.fastmcp import FastMCP
 
 from .artifacts import ArtifactError, ArtifactStore
+from .bugs import BugReportError, BugReportStore
 from .client import LavaClient, LavaError, client_from, ser2net_endpoint
 from .config import Config
 from .gateway import Gateway
@@ -73,12 +74,11 @@ guess blind. If this server offers the read_lava_docs tool (the required-reading
 above says so when it does), also read the action reference for the deploy/boot methods
 you use. Either way, validate_job before submitting.
 
-Job priority: DEFAULT to `priority: low` on every job you build. Agentic LAVA use shares
-the lab with regular CI, and CI jobs run at the default (medium) priority — a low-priority
-agent job queues behind them rather than displacing a team's pipeline. Only raise it
-(medium/high) when a human has a genuinely time-critical need and you understand it will
-jump the queue ahead of CI. (The interactive-session jobs this server builds are already
-submitted at low priority.)
+Job priority: a normal deploy/boot/test job runs to completion on its own, so the default
+(medium) `priority` is fine — leave it unless a human asks otherwise. Only the
+INTERACTIVE-session jobs this server builds are submitted at `priority: low`, because they
+hold a board for a whole manual session and low priority keeps that agentic board-holding
+from displacing regular CI; that is automatic and you do not set it.
 
 Targeting a device: by default the scheduler picks any free board of `device_type`. To
 pin a job to ONE exact board, add a top-level `device: <hostname>` (single-node jobs
@@ -229,6 +229,12 @@ it — that is the lab's cache (kisscache) and it speeds up repeat/large downloa
 
 Handing out an SSH key (attach_shell/attach_console): the returned private_key must
 be saved to a file with `chmod 600` — ssh refuses a key file with looser permissions.
+
+Hit a bug? If this server offers report_bug, use it to file a short, TEXT-ONLY report
+about a defect, a wrong/confusing tool result, a gap in these instructions, or LAVA
+behaviour that seems broken — the maintainers review them periodically. Keep it brief
+(reports are size-capped and are not for logs or large output; summarise). Your LAVA
+user is recorded automatically as the reporter.
 """
 
 
@@ -890,6 +896,16 @@ def build_server(config: Config) -> FastMCP:
             )
             _register_artifact_routes(mcp, config, artifacts)
             mcp._lava_artifacts = artifacts  # type: ignore[attr-defined]
+
+    bugs: BugReportStore | None = None
+    if config.bug_reports_enabled:
+        bugs = BugReportStore(
+            config.bug_report_dir or None,
+            max_report_bytes=config.bug_report_max_bytes,
+            total_max_bytes=config.bug_report_total_max_bytes,
+            max_count=config.bug_report_max_count,
+        )
+        mcp._lava_bug_reports = bugs  # type: ignore[attr-defined]
 
     def client() -> LavaClient:
         """Resolve the LAVA client for the current request (per-client creds)."""
@@ -1961,5 +1977,77 @@ def build_server(config: Config) -> FastMCP:
             user = require_user(config.http_allow_users)
             _flush_pending_tokens(client(), user)
             return {"artifacts": [a.public_view() for a in artifacts.list_for(user)]}
+
+    if bugs is not None:
+
+        @mcp.tool()
+        def report_bug(
+            summary: str,
+            details: str = "",
+            category: str = "",
+            job_id: int | None = None,
+        ) -> Any:
+            """File a short, TEXT-ONLY bug report about lava-mcp or LAVA for the
+            operators to review periodically.
+
+            Use this when you hit a defect, a confusing/wrong tool result, a gap in
+            these instructions, or LAVA behaviour that seems broken — anything a human
+            maintaining this server should see. It is NOT a place to store task output,
+            logs, or large context: reports are kept tiny (a per-report byte limit) and
+            the whole inbox is disk-capped, so if you exceed the size the report is
+            rejected — summarise instead.
+
+            `summary` is required (one line). `details` optionally adds steps to
+            reproduce / expected vs actual, `category` a short tag (e.g. "docs",
+            "tool-error", "lava"), and `job_id` a related LAVA job. The reporting USER is
+            recorded automatically from your LAVA token — you do not pass it. Returns the
+            bug_id, or an `error` with a `reason` (empty / too_large / full).
+            """
+            reporter = ""
+            try:
+                reporter = _lava_username(client().whoami()) or ""
+            except LavaError:
+                reporter = ""
+            try:
+                report = bugs.create(
+                    reporter=reporter,
+                    summary=summary,
+                    details=details,
+                    category=category,
+                    job_id=job_id,
+                )
+            except BugReportError as exc:
+                return {"error": str(exc), "reason": exc.reason}
+            return {
+                "reported": True,
+                "bug_id": report.bug_id,
+                "reporter": report.reporter,
+                "note": "Recorded for operator review. Reports are text-only and "
+                "size-limited — thank you.",
+            }
+
+        @mcp.tool()
+        def list_bug_reports() -> Any:
+            """List filed bug reports for review (operator tool).
+
+            Returns every open report with its reporter (the LAVA user who filed it),
+            time, summary/details, category and any job_id. Gated by the same user
+            allowlist as the interactive 'use' tools (open to all when unset).
+            """
+            require_user(config.http_allow_users)
+            rows = bugs.list()
+            return {"count": len(rows), "reports": [r.public_view() for r in rows]}
+
+        @mcp.tool()
+        def resolve_bug_report(bug_id: str) -> Any:
+            """Resolve (remove) a reviewed bug report, freeing its space (operator tool).
+
+            Gated by the same user allowlist as the interactive 'use' tools.
+            """
+            require_user(config.http_allow_users)
+            report = bugs.resolve(bug_id)
+            if report is None:
+                return {"resolved": False, "reason": "unknown bug id"}
+            return {"resolved": True, "bug_id": bug_id}
 
     return mcp

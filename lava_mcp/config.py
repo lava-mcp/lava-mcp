@@ -111,6 +111,15 @@ class Config:
     artifact_ttl_max: float = 6 * 3600.0
     artifact_max_bytes: int = 6 * 1024**3  # per-artifact cap
     artifact_min_free_fraction: float = 0.10  # reject uploads that cross this free line
+    # size-bounded, text-only bug-report inbox: agents file short reports about
+    # lava-mcp/LAVA behaviour for an operator to review periodically. Strictly capped
+    # (per-report bytes, whole-inbox bytes, max count) so it never eats disk. See
+    # lava_mcp/bugs.py.
+    bug_reports_enabled: bool = True
+    bug_report_dir: str = ""  # empty -> a temp subdir chosen at runtime
+    bug_report_max_bytes: int = 8 * 1024  # per report (summary + details + fields text)
+    bug_report_total_max_bytes: int = 4 * 1024**2  # whole inbox on disk
+    bug_report_max_count: int = 1000  # hard cap on number of open reports
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -174,5 +183,18 @@ class Config:
             ),
             artifact_min_free_fraction=float(
                 os.environ.get("LAVA_MCP_ARTIFACT_MIN_FREE_FRACTION", "0.10")
+            ),
+            bug_reports_enabled=_env_bool("LAVA_MCP_BUG_REPORTS_ENABLED", True),
+            bug_report_dir=os.environ.get("LAVA_MCP_BUG_REPORT_DIR", ""),
+            bug_report_max_bytes=int(
+                os.environ.get("LAVA_MCP_BUG_REPORT_MAX_BYTES", str(8 * 1024))
+            ),
+            bug_report_total_max_bytes=int(
+                os.environ.get(
+                    "LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES", str(4 * 1024**2)
+                )
+            ),
+            bug_report_max_count=int(
+                os.environ.get("LAVA_MCP_BUG_REPORT_MAX_COUNT", "1000")
             ),
         )

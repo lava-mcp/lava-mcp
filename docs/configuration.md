@@ -83,3 +83,15 @@ See [lava-source-docs.md](lava-source-docs.md).
 | `LAVA_SOURCE_REF` | (derived) | Ref to check out; empty = derive from the LAVA API version. |
 | `LAVA_SOURCE_DIR` | (temp subdir) | Local checkout dir for the mirror. |
 | `LAVA_SOURCE_POLL_INTERVAL` | `300` | Seconds between version re-reads / checkout updates. |
+
+## Bug-report inbox
+
+See [bug-reports.md](bug-reports.md).
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `LAVA_MCP_BUG_REPORTS_ENABLED` | `1` | Offer the `report_bug` / `list_bug_reports` / `resolve_bug_report` tools. |
+| `LAVA_MCP_BUG_REPORT_DIR` | (temp subdir) | Where reports are stored (one small JSON each). |
+| `LAVA_MCP_BUG_REPORT_MAX_BYTES` | `8192` | Per-report text cap (summary + details + category). |
+| `LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES` | `4194304` (4 MB) | Whole-inbox disk cap. |
+| `LAVA_MCP_BUG_REPORT_MAX_COUNT` | `1000` | Maximum number of open reports. |
