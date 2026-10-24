@@ -2031,10 +2031,10 @@ def build_server(config: Config) -> FastMCP:
             """List filed bug reports for review (operator tool).
 
             Returns every open report with its reporter (the LAVA user who filed it),
-            time, summary/details, category and any job_id. Gated by the same user
-            allowlist as the interactive 'use' tools (open to all when unset).
+            time, summary/details, category and any job_id. Gated by
+            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
             """
-            require_user(config.http_allow_users)
+            require_user(config.bug_admin_users)
             rows = bugs.list()
             return {"count": len(rows), "reports": [r.public_view() for r in rows]}
 
@@ -2042,9 +2042,9 @@ def build_server(config: Config) -> FastMCP:
         def resolve_bug_report(bug_id: str) -> Any:
             """Resolve (remove) a reviewed bug report, freeing its space (operator tool).
 
-            Gated by the same user allowlist as the interactive 'use' tools.
+            Gated by LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
             """
-            require_user(config.http_allow_users)
+            require_user(config.bug_admin_users)
             report = bugs.resolve(bug_id)
             if report is None:
                 return {"resolved": False, "reason": "unknown bug id"}

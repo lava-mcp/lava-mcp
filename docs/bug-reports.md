@@ -30,8 +30,9 @@ Returns the `bug_id` and the recorded `reporter`, or an `error` with a `reason`
   category and job_id.
 - `resolve_bug_report(bug_id)` — removes a reviewed report, **freeing its space**.
 
-Both are gated by the same user allowlist as the interactive *use* tools
-(`LAVA_MCP_HTTP_ALLOW_USERS`); open to all when that is unset. Reports are stored as one
+Both are gated by `LAVA_MCP_BUG_ADMIN_USERS` — a comma/space-separated list of LAVA
+usernames allowed to review the inbox, independent of the interactive-use allowlist; open
+to all when unset. Filing a report is always open regardless. Reports are stored as one
 small JSON file each under `LAVA_MCP_BUG_REPORT_DIR`, so you can also read them straight
 off disk. Filing and resolving are logged under the `lava_mcp` logger.
 

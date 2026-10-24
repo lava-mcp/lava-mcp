@@ -95,3 +95,4 @@ See [bug-reports.md](bug-reports.md).
 | `LAVA_MCP_BUG_REPORT_MAX_BYTES` | `8192` | Per-report text cap (summary + details + category). |
 | `LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES` | `4194304` (4 MB) | Whole-inbox disk cap. |
 | `LAVA_MCP_BUG_REPORT_MAX_COUNT` | `1000` | Maximum number of open reports. |
+| `LAVA_MCP_BUG_ADMIN_USERS` | (empty = open) | LAVA users allowed to review the inbox (`list_bug_reports` / `resolve_bug_report`); filing is always open. |

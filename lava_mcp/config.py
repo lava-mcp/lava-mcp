@@ -120,6 +120,10 @@ class Config:
     bug_report_max_bytes: int = 8 * 1024  # per report (summary + details + fields text)
     bug_report_total_max_bytes: int = 4 * 1024**2  # whole inbox on disk
     bug_report_max_count: int = 1000  # hard cap on number of open reports
+    # LAVA users allowed to REVIEW the inbox (list_bug_reports / resolve_bug_report).
+    # Filing a report is always open; empty here means review is open too. Independent
+    # of http_allow_users so bug review can be locked down separately.
+    bug_admin_users: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -197,4 +201,5 @@ class Config:
             bug_report_max_count=int(
                 os.environ.get("LAVA_MCP_BUG_REPORT_MAX_COUNT", "1000")
             ),
+            bug_admin_users=_env_list("LAVA_MCP_BUG_ADMIN_USERS"),
         )
