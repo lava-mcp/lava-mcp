@@ -210,9 +210,14 @@ def test_read_tools_always_present() -> None:
 
 def test_bug_report_tools_present_by_default_and_gateable() -> None:
     # on by default, even in read-only (reporting a bug is not a LAVA write)
-    assert {"report_bug", "list_bug_reports", "resolve_bug_report"} <= tool_names(
-        read_only=True
-    )
+    assert {
+        "report_bug",
+        "my_bug_reports",
+        "list_bug_reports",
+        "respond_bug_report",
+        "resolve_bug_report",
+        "purge_bug_report",
+    } <= tool_names(read_only=True)
     disabled = asyncio.run(
         build_server(
             Config(url="https://lava.example.com", bug_reports_enabled=False)

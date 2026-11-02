@@ -70,13 +70,72 @@ def test_inbox_count_and_disk_caps(tmp_path) -> None:
     assert exc2.value.reason == "full"
 
 
-def test_resolve_removes_and_frees(tmp_path) -> None:
+def test_resolve_archives_and_frees_intake(tmp_path) -> None:
+    store = make_store(tmp_path, max_count=1)
+    r = store.create(reporter="a", summary="bug")
+    resolved = store.resolve(r.bug_id, response="fixed in next build")
+    assert resolved is not None and resolved.status == "resolved"
+    assert resolved.response == "fixed in next build"
+    # it leaves the open inbox (file moved) but is kept in the archive
+    assert not (tmp_path / f"{r.bug_id}.json").exists()
+    assert (tmp_path / "archive" / f"{r.bug_id}.json").exists()
+    assert store.get(r.bug_id) is not None
+    assert store.resolve(r.bug_id) is None  # no longer an OPEN report
+    # resolving freed the intake slot even though max_count==1
+    store.create(reporter="a", summary="another")
+    # archived report is readable by its filer and survives a reload
+    reloaded = make_store(tmp_path, max_count=1)
+    mine = reloaded.mine("a")
+    assert any(m.bug_id == r.bug_id and m.response == "fixed in next build"
+               for m in mine)
+
+
+def test_respond_keeps_report_open_and_visible_to_filer(tmp_path) -> None:
+    store = make_store(tmp_path)
+    r = store.create(reporter="alice", summary="docs wrong")
+    updated = store.respond(r.bug_id, "thanks, fixing", responder="op")
+    assert updated is not None and updated.status == "answered"
+    assert updated.responder == "op"
+    # still an open report for the operator
+    assert any(x.bug_id == r.bug_id for x in store.list())
+    # the filer sees the reply; another user does not
+    assert store.mine("alice")[0].response == "thanks, fixing"
+    assert store.mine("bob") == []
+    with pytest.raises(BugReportError):
+        store.respond(r.bug_id, "   ")  # empty reply rejected
+
+
+def test_purge_deletes_open_or_archived(tmp_path) -> None:
     store = make_store(tmp_path)
     r = store.create(reporter="a", summary="bug")
-    assert store.resolve(r.bug_id) is not None
+    store.resolve(r.bug_id)
+    assert store.purge(r.bug_id) is not None  # archived one gone
     assert store.get(r.bug_id) is None
-    assert store.resolve(r.bug_id) is None  # already gone
-    assert not (tmp_path / f"{r.bug_id}.json").exists()
+    assert not (tmp_path / "archive" / f"{r.bug_id}.json").exists()
+    r2 = store.create(reporter="a", summary="open bug")
+    assert store.purge(r2.bug_id) is not None  # open one gone
+    assert store.purge("nope") is None
+
+
+def test_archive_evicts_oldest_past_cap(tmp_path) -> None:
+    store = make_store(tmp_path, max_count=2)
+    ids = []
+    for i in range(3):
+        r = store.create(reporter="a", summary=f"bug {i}")
+        store.resolve(r.bug_id)
+        ids.append(r.bug_id)
+    # archive is capped at max_count; the oldest resolved aged out
+    assert store.get(ids[0]) is None
+    assert store.get(ids[1]) is not None and store.get(ids[2]) is not None
+
+
+def test_malformed_file_is_kept_visible(tmp_path) -> None:
+    (tmp_path / "garbage.json").write_text("not json {{{")
+    store = make_store(tmp_path)
+    rows = store.list()
+    assert len(rows) == 1 and rows[0].malformed and rows[0].bug_id == "garbage"
+    # an operator can clear it
+    assert store.purge("garbage") is not None
 
 
 def test_job_id_coercion(tmp_path) -> None:

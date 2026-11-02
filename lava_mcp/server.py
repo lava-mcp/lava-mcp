@@ -2002,6 +2002,9 @@ def build_server(config: Config) -> FastMCP:
             "tool-error", "lava"), and `job_id` a related LAVA job. The reporting USER is
             recorded automatically from your LAVA token — you do not pass it. Returns the
             bug_id, or an `error` with a `reason` (empty / too_large / full).
+
+            An operator may reply: call `my_bug_reports` later (same LAVA user) to read
+            any response and whether it has been resolved.
             """
             reporter = ""
             try:
@@ -2023,31 +2026,91 @@ def build_server(config: Config) -> FastMCP:
                 "bug_id": report.bug_id,
                 "reporter": report.reporter,
                 "note": "Recorded for operator review. Reports are text-only and "
-                "size-limited — thank you.",
+                "size-limited — thank you. Check my_bug_reports later for a reply.",
             }
 
         @mcp.tool()
-        def list_bug_reports() -> Any:
+        def my_bug_reports() -> Any:
+            """Read the bug reports YOU filed, with any operator reply (open to all).
+
+            Matches on the LAVA user your token authenticates as — it only ever returns
+            your own reports. Each carries its `status` (open / answered / resolved) and,
+            once an operator replies, their `response`. Use it to check back on a bug you
+            filed in an earlier session.
+            """
+            reporter = ""
+            try:
+                reporter = _lava_username(client().whoami()) or ""
+            except LavaError:
+                reporter = ""
+            rows = bugs.mine(reporter)
+            return {
+                "reporter": reporter,
+                "count": len(rows),
+                "reports": [r.public_view() for r in rows],
+            }
+
+        @mcp.tool()
+        def list_bug_reports(include_resolved: bool = False) -> Any:
             """List filed bug reports for review (operator tool).
 
             Returns every open report with its reporter (the LAVA user who filed it),
-            time, summary/details, category and any job_id. Gated by
+            time, summary/details, category, any job_id, and its status/response. Set
+            `include_resolved` to also list archived (resolved) reports. Gated by
             LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
             """
             require_user(config.bug_admin_users)
-            rows = bugs.list()
+            rows = bugs.list(include_resolved=include_resolved)
             return {"count": len(rows), "reports": [r.public_view() for r in rows]}
 
         @mcp.tool()
-        def resolve_bug_report(bug_id: str) -> Any:
-            """Resolve (remove) a reviewed bug report, freeing its space (operator tool).
+        def respond_bug_report(bug_id: str, response: str) -> Any:
+            """Reply to a filed bug report so the filer can read it (operator tool).
 
+            Records your `response` on an OPEN report and marks it answered; it stays in
+            the inbox. The filer reads it via `my_bug_reports`. To reply and clear in one
+            step, use `resolve_bug_report(bug_id, response=...)`. Gated by
+            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            """
+            user = require_user(config.bug_admin_users)
+            try:
+                report = bugs.respond(bug_id, response, responder=user)
+            except BugReportError as exc:
+                return {"responded": False, "reason": exc.reason, "error": str(exc)}
+            if report is None:
+                return {"responded": False, "reason": "unknown open bug id"}
+            return {"responded": True, "bug_id": bug_id, "status": report.status}
+
+        @mcp.tool()
+        def resolve_bug_report(bug_id: str, response: str = "") -> Any:
+            """Resolve a reviewed bug report, archiving it for the filer (operator tool).
+
+            The report is moved to the archive (status `resolved`) rather than deleted,
+            so the filer can still read the outcome via `my_bug_reports`; this also frees
+            an intake slot. Pass `response` to attach a final reply at the same time. Use
+            `purge_bug_report` to delete a report for good. Gated by
+            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            """
+            user = require_user(config.bug_admin_users)
+            report = bugs.resolve(
+                bug_id, response=response or None, responder=user
+            )
+            if report is None:
+                return {"resolved": False, "reason": "unknown open bug id"}
+            return {"resolved": True, "bug_id": bug_id, "archived": True}
+
+        @mcp.tool()
+        def purge_bug_report(bug_id: str) -> Any:
+            """Delete a bug report for good — open or archived (operator tool).
+
+            Unlike `resolve_bug_report` this keeps no copy, so the filer can no longer
+            read it. Use it to clear the archive or drop an unparseable/spam report.
             Gated by LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
             """
             require_user(config.bug_admin_users)
-            report = bugs.resolve(bug_id)
+            report = bugs.purge(bug_id)
             if report is None:
-                return {"resolved": False, "reason": "unknown bug id"}
-            return {"resolved": True, "bug_id": bug_id}
+                return {"purged": False, "reason": "unknown bug id"}
+            return {"purged": True, "bug_id": bug_id}
 
     return mcp

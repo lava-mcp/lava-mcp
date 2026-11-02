@@ -40,8 +40,9 @@ Each feature is documented on its own page:
   the deployed LAVA's documentation and source from a local git mirror at the exact
   deployed ref.
 - **[Bug-report inbox](docs/bug-reports.md)** — agents file short, text-only reports
-  about lava-mcp/LAVA issues (attributed to their LAVA user) for an operator to review;
-  strictly size-bounded so it never eats disk.
+  about lava-mcp/LAVA issues (attributed to their LAVA user) for an operator to review
+  and reply to; the filer reads the reply back, so it's a short conversation. Strictly
+  size-bounded so it never eats disk.
 
 Supporting docs:
 
@@ -74,8 +75,9 @@ Artifact store (hosted mode, when enabled): `create_artifact_upload`, `list_arti
 
 LAVA docs & source (when `LAVA_SOURCE_REPO` is set): `read_lava_docs`.
 
-Bug reports (on by default): `report_bug`; operators also get `list_bug_reports`,
-`resolve_bug_report`.
+Bug reports (on by default): `report_bug`, `my_bug_reports` (read your own + any reply);
+operators also get `list_bug_reports`, `respond_bug_report`, `resolve_bug_report`,
+`purge_bug_report`.
 
 ## Test
 

@@ -1,8 +1,10 @@
 # Bug-report inbox
 
 A small, text-only inbox so agents (and humans) can report problems with lava-mcp or
-LAVA behaviour, which an operator reviews periodically. It's enabled by default
-(`LAVA_MCP_BUG_REPORTS_ENABLED=1`) and needs no hosted mode.
+LAVA behaviour, which an operator reviews periodically — and, because the operator can
+reply and the filer can read that reply back, a report is a short conversation rather
+than a write-only drop box. It's enabled by default (`LAVA_MCP_BUG_REPORTS_ENABLED=1`)
+and needs no hosted mode.
 
 ## What it's for
 
@@ -24,17 +26,39 @@ is never supplied by the agent, so every report is attributable to a real LAVA u
 Returns the `bug_id` and the recorded `reporter`, or an `error` with a `reason`
 (`empty` / `too_large` / `full`).
 
+## Reading your own reports (filer)
+
+`my_bug_reports()` — open to any token holder — returns the reports **you** filed
+(matched on your LAVA username), newest first, each with its `status`
+(`open` / `answered` / `resolved`) and the operator's `response` once one is recorded.
+An agent that filed a bug in an earlier session calls this to see whether it was
+answered or resolved. It only ever returns the caller's own reports.
+
 ## Reviewing (operator)
 
-- `list_bug_reports()` — every open report with reporter, time, summary/details,
-  category and job_id.
-- `resolve_bug_report(bug_id)` — removes a reviewed report, **freeing its space**.
+- `list_bug_reports(include_resolved=False)` — every open report with reporter, time,
+  summary/details, category, job_id, status and any response; set `include_resolved`
+  to also list the archive.
+- `respond_bug_report(bug_id, response)` — reply to a report and mark it `answered`;
+  it stays in the inbox and the filer reads the reply via `my_bug_reports`.
+- `resolve_bug_report(bug_id, response="")` — mark a report dealt with. It is **moved
+  to the archive** (status `resolved`), not deleted, so the filer can still read the
+  outcome; this also frees an intake slot. Pass `response` to reply and resolve in one
+  step.
+- `purge_bug_report(bug_id)` — delete a report for good, open or archived (no copy
+  kept). Use it to clear the archive or drop an unparseable/spam report.
 
-Both are gated by `LAVA_MCP_BUG_ADMIN_USERS` — a comma/space-separated list of LAVA
-usernames allowed to review the inbox, independent of the interactive-use allowlist; open
-to all when unset. Filing a report is always open regardless. Reports are stored as one
-small JSON file each under `LAVA_MCP_BUG_REPORT_DIR`, so you can also read them straight
-off disk. Filing and resolving are logged under the `lava_mcp` logger.
+These four are gated by `LAVA_MCP_BUG_ADMIN_USERS` — a comma/space-separated list of
+LAVA usernames allowed to review the inbox, independent of the interactive-use
+allowlist; open to all when unset. Filing (`report_bug`) and reading your own
+(`my_bug_reports`) are always open regardless. Reports are stored as one small JSON file
+each under `LAVA_MCP_BUG_REPORT_DIR` (resolved ones under `archive/`), so you can also
+read them straight off disk. Filing, replying, resolving and purging are logged under
+the `lava_mcp` logger.
+
+A report file that can't be parsed is **kept and shown** (marked `malformed`) rather
+than silently dropped, so an operator always sees that something was filed and can
+`purge` it.
 
 ## Size bounds (so it never eats disk)
 
@@ -43,9 +67,14 @@ configurable (see [configuration.md](configuration.md)):
 
 - **per report** — `LAVA_MCP_BUG_REPORT_MAX_BYTES` (default 8 KB; summary + details +
   category). Over this, the report is rejected (`too_large`) — summarise instead.
-- **whole inbox on disk** — `LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES` (default 4 MB).
-- **number of reports** — `LAVA_MCP_BUG_REPORT_MAX_COUNT` (default 1000).
+- **whole inbox on disk** — `LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES` (default 4 MB),
+  counting **open and archived** reports together.
+- **number of open reports** — `LAVA_MCP_BUG_REPORT_MAX_COUNT` (default 1000).
 
-When the inbox hits its disk or count cap, new reports are rejected (`full`) rather than
-silently dropped or evicting existing ones — the signal to an operator to review and
-clear it. Resolving reports frees space and count.
+When the inbox hits its disk or open-count cap, new reports are rejected (`full`) rather
+than silently dropped or evicting existing ones — the signal to an operator to review
+and clear it. Resolving a report frees an open-count slot (it moves to the archive) but
+not disk; `purge` frees both. The archive is itself bounded to `MAX_COUNT` resolved
+reports and, unlike the open inbox, evicts its **oldest** when it would overflow — it is
+a best-effort convenience for the filer, never a guarantee, so an old resolved report
+may age out before the filer reads it.
