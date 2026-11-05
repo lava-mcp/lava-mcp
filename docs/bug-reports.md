@@ -48,13 +48,21 @@ answered or resolved. It only ever returns the caller's own reports.
 - `purge_bug_report(bug_id)` — delete a report for good, open or archived (no copy
   kept). Use it to clear the archive or drop an unparseable/spam report.
 
-These four are gated by `LAVA_MCP_BUG_ADMIN_USERS` — a comma/space-separated list of
-LAVA usernames allowed to review the inbox, independent of the interactive-use
-allowlist; open to all when unset. Filing (`report_bug`) and reading your own
-(`my_bug_reports`) are always open regardless. Reports are stored as one small JSON file
-each under `LAVA_MCP_BUG_REPORT_DIR` (resolved ones under `archive/`), so you can also
-read them straight off disk. Filing, replying, resolving and purging are logged under
-the `lava_mcp` logger.
+These four **require a LAVA admin (superuser) account**. Reviewing the inbox means
+reading other users' reports, so the caller must authenticate as a LAVA admin — and that
+is checked against LAVA itself, not self-asserted. LAVA exposes no self-service admin
+flag (`system/whoami/` returns only the username), so the server detects it by probing a
+superuser-only REST endpoint (`GET users/`): 200 means admin, 403 means not. The check
+fails closed — a bad token or an unreachable LAVA denies review rather than granting it.
+
+`LAVA_MCP_BUG_ADMIN_USERS` optionally narrows this further: when set, a reviewer must be
+a LAVA admin **and** named in it (a comma/space-separated username list, independent of
+the interactive-use allowlist); empty means any LAVA admin may review. Filing
+(`report_bug`) and reading your own (`my_bug_reports`) are always open regardless.
+
+Reports are stored as one small JSON file each under `LAVA_MCP_BUG_REPORT_DIR` (resolved
+ones under `archive/`), so an admin can also read them straight off disk. Filing,
+replying, resolving and purging are logged under the `lava_mcp` logger.
 
 A report file that can't be parsed is **kept and shown** (marked `malformed`) rather
 than silently dropped, so an operator always sees that something was filed and can

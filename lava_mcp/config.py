@@ -120,9 +120,11 @@ class Config:
     bug_report_max_bytes: int = 8 * 1024  # per report (summary + details + fields text)
     bug_report_total_max_bytes: int = 4 * 1024**2  # whole inbox on disk
     bug_report_max_count: int = 1000  # hard cap on number of open reports
-    # LAVA users allowed to REVIEW the inbox (list_bug_reports / resolve_bug_report).
-    # Filing a report is always open; empty here means review is open too. Independent
-    # of http_allow_users so bug review can be locked down separately.
+    # Reviewing the inbox (list/respond/resolve/purge) requires a LAVA ADMIN
+    # (superuser) account — detected via the REST API, not self-asserted. This optional
+    # allowlist narrows further: when set, a reviewer must be a LAVA admin AND named
+    # here. Empty means any LAVA admin may review. Filing a report, and reading your own
+    # (my_bug_reports), are always open. Independent of http_allow_users.
     bug_admin_users: tuple[str, ...] = ()
 
     @classmethod

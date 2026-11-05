@@ -929,6 +929,27 @@ def build_server(config: Config) -> FastMCP:
         _enforce_user_allowlist(username, allow)
         return username or ""
 
+    def require_bug_admin() -> str:
+        """Gate the bug-review tools on LAVA admin (superuser) status.
+
+        Reviewing the inbox means reading other users' reports, so the caller must
+        authenticate as a LAVA admin — detected via the REST API (see
+        ``LavaClient.is_admin``), not self-asserted. When ``bug_admin_users`` is also
+        set it narrows further: the caller must be a LAVA admin *and* named in it.
+        Raises ``PermissionError`` otherwise. Returns the resolved username.
+        """
+        c = client()
+        username = _lava_username(c.whoami()) or ""
+        if not c.is_admin():
+            raise PermissionError(
+                "reviewing bug reports requires a LAVA admin (superuser) account"
+            )
+        if config.bug_admin_users and username not in config.bug_admin_users:
+            raise PermissionError(
+                f"LAVA user {username!r} is not permitted to review bug reports"
+            )
+        return username
+
     # -- system / identity -------------------------------------------------
     @mcp.tool()
     def whoami() -> Any:
@@ -2056,10 +2077,10 @@ def build_server(config: Config) -> FastMCP:
 
             Returns every open report with its reporter (the LAVA user who filed it),
             time, summary/details, category, any job_id, and its status/response. Set
-            `include_resolved` to also list archived (resolved) reports. Gated by
-            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            `include_resolved` to also list archived (resolved) reports. Requires a LAVA
+            ADMIN (superuser) account; LAVA_MCP_BUG_ADMIN_USERS narrows further if set.
             """
-            require_user(config.bug_admin_users)
+            require_bug_admin()
             rows = bugs.list(include_resolved=include_resolved)
             return {"count": len(rows), "reports": [r.public_view() for r in rows]}
 
@@ -2069,10 +2090,10 @@ def build_server(config: Config) -> FastMCP:
 
             Records your `response` on an OPEN report and marks it answered; it stays in
             the inbox. The filer reads it via `my_bug_reports`. To reply and clear in one
-            step, use `resolve_bug_report(bug_id, response=...)`. Gated by
-            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            step, use `resolve_bug_report(bug_id, response=...)`. Requires a LAVA ADMIN
+            (superuser) account; LAVA_MCP_BUG_ADMIN_USERS narrows further if set.
             """
-            user = require_user(config.bug_admin_users)
+            user = require_bug_admin()
             try:
                 report = bugs.respond(bug_id, response, responder=user)
             except BugReportError as exc:
@@ -2088,10 +2109,10 @@ def build_server(config: Config) -> FastMCP:
             The report is moved to the archive (status `resolved`) rather than deleted,
             so the filer can still read the outcome via `my_bug_reports`; this also frees
             an intake slot. Pass `response` to attach a final reply at the same time. Use
-            `purge_bug_report` to delete a report for good. Gated by
-            LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            `purge_bug_report` to delete a report for good. Requires a LAVA ADMIN
+            (superuser) account; LAVA_MCP_BUG_ADMIN_USERS narrows further if set.
             """
-            user = require_user(config.bug_admin_users)
+            user = require_bug_admin()
             report = bugs.resolve(
                 bug_id, response=response or None, responder=user
             )
@@ -2105,9 +2126,10 @@ def build_server(config: Config) -> FastMCP:
 
             Unlike `resolve_bug_report` this keeps no copy, so the filer can no longer
             read it. Use it to clear the archive or drop an unparseable/spam report.
-            Gated by LAVA_MCP_BUG_ADMIN_USERS (open to all when unset).
+            Requires a LAVA ADMIN (superuser) account; LAVA_MCP_BUG_ADMIN_USERS narrows
+            further if set.
             """
-            require_user(config.bug_admin_users)
+            require_bug_admin()
             report = bugs.purge(bug_id)
             if report is None:
                 return {"purged": False, "reason": "unknown bug id"}

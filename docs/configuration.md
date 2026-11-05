@@ -95,4 +95,4 @@ See [bug-reports.md](bug-reports.md).
 | `LAVA_MCP_BUG_REPORT_MAX_BYTES` | `8192` | Per-report text cap (summary + details + category). |
 | `LAVA_MCP_BUG_REPORT_TOTAL_MAX_BYTES` | `4194304` (4 MB) | Whole-inbox disk cap (open + archived). |
 | `LAVA_MCP_BUG_REPORT_MAX_COUNT` | `1000` | Max open reports; also bounds the archive (oldest resolved aged out past it). |
-| `LAVA_MCP_BUG_ADMIN_USERS` | (empty = open) | LAVA users allowed to review the inbox (`list`/`respond`/`resolve`/`purge`); filing and reading your own are always open. |
+| `LAVA_MCP_BUG_ADMIN_USERS` | (empty) | Reviewing the inbox (`list`/`respond`/`resolve`/`purge`) requires a LAVA **admin (superuser)** account, detected via the REST API. This list narrows further if set (reviewer must be a LAVA admin **and** named); empty = any LAVA admin. Filing and reading your own are always open. |

@@ -97,6 +97,31 @@ class LavaClient:
     def version(self) -> Any:
         return self._get_json("system/version/")
 
+    def is_admin(self) -> bool:
+        """Whether the caller's token authenticates as a LAVA superuser (admin).
+
+        LAVA exposes no self-service admin flag — ``system/whoami/`` returns the
+        username only, and the ``users/`` records that carry ``is_superuser`` are
+        behind a superuser-only viewset. So this probes that viewset: ``GET users/``
+        answers 200 for a superuser and 403 for anyone else. 200 -> True, 403 ->
+        False; any other status (e.g. 401 for a bad token) raises, so a gate built on
+        this fails closed rather than silently granting or denying.
+        """
+        url = urljoin(self.base, "users/")
+        try:
+            resp = self.session.request(
+                "GET", url, params={"limit": 1}, timeout=self.config.timeout
+            )
+        except requests.RequestException as exc:
+            raise LavaError(f"request to {url} failed: {exc}") from exc
+        if resp.status_code == 200:
+            return True
+        if resp.status_code == 403:
+            return False
+        raise LavaError(
+            f"GET {url} -> HTTP {resp.status_code}: {resp.text[:200]}"
+        )
+
     # -- inventory ---------------------------------------------------------
     def list_devices(self, limit: int = 50, **filters: Any) -> dict[str, Any]:
         return self._list("devices/", limit, **filters)

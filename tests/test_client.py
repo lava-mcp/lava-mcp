@@ -97,6 +97,28 @@ def test_version(client: LavaClient) -> None:
 
 
 @responses.activate
+def test_is_admin_true_when_superuser_endpoint_allows(client: LavaClient) -> None:
+    # 200 from the superuser-only users/ viewset => caller is a LAVA admin
+    responses.get(BASE + "users/", json={"count": 0, "results": []}, status=200)
+    assert client.is_admin() is True
+
+
+@responses.activate
+def test_is_admin_false_on_forbidden(client: LavaClient) -> None:
+    # 403 => authenticated but not a superuser
+    responses.get(BASE + "users/", json={"detail": "forbidden"}, status=403)
+    assert client.is_admin() is False
+
+
+@responses.activate
+def test_is_admin_raises_on_other_status(client: LavaClient) -> None:
+    # anything else (e.g. 401 bad token) must raise so a gate fails closed
+    responses.get(BASE + "users/", json={"detail": "bad token"}, status=401)
+    with pytest.raises(LavaError):
+        client.is_admin()
+
+
+@responses.activate
 def test_list_devices_pagination(client: LavaClient) -> None:
     responses.get(
         BASE + "devices/",
