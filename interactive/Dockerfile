@@ -14,6 +14,9 @@
 # The pre-installed set below just covers the common cases.
 FROM debian:trixie-slim
 
+# python3 + python3-websockets back the ssh ProxyCommand (lava-ws-proxy) that tunnels
+# the reverse-SSH dial-out over wss:// (443, via Caddy). Both are packaged in Debian —
+# no fetching an unpackaged binary at build time (this replaces websocat).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openssh-server \
         autossh \
@@ -26,36 +29,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         git \
         python3 \
+        python3-websockets \
         tar \
         iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# websocat: ssh ProxyCommand that tunnels the reverse-SSH dial-out over wss://
-# (443, via Caddy). Debian has no package, so fetch the static musl build at
-# image-build time (the lab blocks runtime egress, not the build). Bump
-# WEBSOCAT_VERSION if the pinned release moves.
-ARG WEBSOCAT_VERSION=1.13.0
-ARG TARGETARCH=amd64
-RUN set -eux; \
-    case "${TARGETARCH}" in \
-        amd64) wsarch=x86_64 ;; \
-        arm64) wsarch=aarch64 ;; \
-        *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /usr/local/bin/websocat \
-        "https://github.com/vi/websocat/releases/download/v${WEBSOCAT_VERSION}/websocat.${wsarch}-unknown-linux-musl"; \
-    chmod +x /usr/local/bin/websocat; \
-    websocat --version
-
-# Session foreground supervisor + the device-command/signal relay clients. The
-# supervisor manages the reverse tunnel and lets agent ssh sessions run LAVA device
-# commands (power_on/off, hard_reset, ...) and emit signals via the dispatcher.
+# Session foreground supervisor + the device-command/signal relay clients, plus the
+# WebSocket ProxyCommand (lava-ws-proxy). The supervisor manages the reverse tunnel and
+# lets agent ssh sessions run LAVA device commands (power_on/off, hard_reset, ...) and
+# emit signals via the dispatcher.
 COPY lava-gateway-connect lava-session-supervisor lava-device-command lava-signal \
-     lava-power-on lava-power-off lava-hard-reset /usr/local/bin/
+     lava-power-on lava-power-off lava-hard-reset lava-ws-proxy /usr/local/bin/
 RUN chmod +x /usr/local/bin/lava-gateway-connect \
         /usr/local/bin/lava-session-supervisor \
         /usr/local/bin/lava-device-command \
         /usr/local/bin/lava-signal \
         /usr/local/bin/lava-power-on \
         /usr/local/bin/lava-power-off \
-        /usr/local/bin/lava-hard-reset
+        /usr/local/bin/lava-hard-reset \
+        /usr/local/bin/lava-ws-proxy

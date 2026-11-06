@@ -363,11 +363,15 @@ def test_enforce_user_allowlist() -> None:
         _enforce_user_allowlist(None, ("alice",))
 
 
-def test_build_shell_ssh_config_tunnels_over_websocat() -> None:
+def test_build_shell_ssh_config_tunnels_over_ws_proxy() -> None:
     ws = "wss://lava.example.com/gateway-ssh"
     conf = build_shell_ssh_config("s-abc", "k.key", ws, 45678, "root")
-    # the jump host reaches the gateway only over the WebSocket transport
-    assert f"ProxyCommand websocat -b {ws}" in conf
+    # the jump host reaches the gateway only over the WebSocket transport, via the
+    # python proxy (not websocat)
+    assert f"ProxyCommand python3 lava-ws-proxy {ws}" in conf
+    assert "websocat" not in conf
+    # the config tells the client where to fetch the proxy from the MCP
+    assert "gateway-proxy" in conf and "curl -o lava-ws-proxy" in conf
     # ProxyJump then rides the reverse tunnel to the board container's sshd
     assert "ProxyJump gw-s-abc" in conf
     assert "Port 45678" in conf
@@ -377,10 +381,11 @@ def test_build_shell_ssh_config_tunnels_over_websocat() -> None:
     assert "Port 22\n" not in conf
 
 
-def test_build_console_ssh_command_tunnels_over_websocat() -> None:
+def test_build_console_ssh_command_tunnels_over_ws_proxy() -> None:
     ws = "wss://lava.example.com/gateway-ssh"
     cmd = build_console_ssh_command("s-xyz", "k.key", ws, 33333, "gw.example.com")
-    assert f"ProxyCommand=websocat -b {ws}" in cmd
+    assert f"ProxyCommand=python3 lava-ws-proxy {ws}" in cmd
+    assert "websocat" not in cmd
     assert "-W 127.0.0.1:33333" in cmd
     assert "s-xyz@gw.example.com" in cmd
     # WebSocket-only: no `-p <port>` direct gateway dial

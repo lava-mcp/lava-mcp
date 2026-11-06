@@ -74,7 +74,7 @@ docker compose up -d
 - In-job containers and humans reach the SSH gateway over the WebSocket transport at
   `wss://$LAVA_MCP_DOMAIN/mcp/gateway-ssh` — a WebSocket route on the MCP app itself
   (same port as `/mcp`, so Caddy's existing `/mcp` route serves it). Set
-  `LAVA_MCP_GATEWAY_WS_URL` to that URL; clients use `websocat`.
+  `LAVA_MCP_GATEWAY_WS_URL` to that URL; clients use the `lava-ws-proxy` ProxyCommand (python3 + `websockets`), served by the MCP at `/mcp/gateway-proxy`.
 - The [artifact store](artifact-store.md) routes ride the same `/mcp*` path under
   `/mcp/artifacts` (uploads/downloads over 443).
 

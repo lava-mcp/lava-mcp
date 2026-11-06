@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+"""lava-mcp gateway proxy: relay ssh stdio over a wss:// WebSocket.
+
+Dependency-light stand-in for `websocat -b <url>` as an ssh ProxyCommand:
+    ssh -o ProxyCommand="python3 lava-ws-proxy wss://HOST/mcp/gateway-ssh" ...
+
+Any extra args ssh appends (e.g. %h %p) are ignored; the first ws:// or wss://
+argument is used. Requires Python 3.8+ and the `websockets` package
+(apt install python3-websockets, or pip install websockets).
+"""
+import sys
+
+def _run_relay(url):
+    import asyncio
+    import os
+    import sys
+    import warnings
+
+    warnings.filterwarnings("ignore")  # keep ssh ProxyCommand stderr clean
+    try:
+        import websockets
+    except ImportError:
+        sys.stderr.write(
+            "lava-ws-proxy: needs the 'websockets' package "
+            "(apt install python3-websockets, or pip install websockets)\n"
+        )
+        sys.exit(1)
+
+    async def _relay():
+        try:
+            ws = await websockets.connect(url, max_size=None, ping_interval=None)
+        except Exception as exc:
+            sys.stderr.write("lava-ws-proxy: cannot connect to %s: %s\n" % (url, exc))
+            sys.exit(1)
+
+        async def ws_to_stdout():
+            try:
+                async for msg in ws:
+                    if isinstance(msg, str):
+                        msg = msg.encode()
+                    data = memoryview(msg)
+                    while data:
+                        data = data[os.write(1, data):]
+            except Exception:
+                pass
+
+        async def stdin_to_ws():
+            loop = asyncio.get_event_loop()
+            try:
+                while True:
+                    chunk = await loop.run_in_executor(None, os.read, 0, 65536)
+                    if not chunk:
+                        break
+                    await ws.send(chunk)
+            except Exception:
+                pass
+            finally:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+
+        tasks = [asyncio.ensure_future(ws_to_stdout()),
+                 asyncio.ensure_future(stdin_to_ws())]
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        os._exit(0)
+
+    asyncio.run(_relay())
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a]
+    url = next((a for a in args
+                if a.startswith("ws://") or a.startswith("wss://")), None)
+    if not url:
+        sys.stderr.write("usage: lava-ws-proxy wss://HOST/mcp/gateway-ssh\n")
+        return 2
+    try:
+        _run_relay(url)
+        return 0
+    except KeyboardInterrupt:
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

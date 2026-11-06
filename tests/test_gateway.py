@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import os
 import shutil
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
@@ -31,7 +32,11 @@ from lava_mcp.jobs import (
 )
 from lava_mcp.server import build_server
 
-_HAS_WS_CLIENT = bool(shutil.which("websocat") and shutil.which("ssh"))
+# The ProxyCommand is now the python3 + websockets relay (lava-ws-proxy), so we need
+# ssh and the websockets package rather than the websocat binary.
+_HAS_WS_CLIENT = bool(
+    shutil.which("ssh") and importlib.util.find_spec("websockets")
+)
 _HAS_UVICORN = importlib.util.find_spec("uvicorn") is not None
 
 
@@ -707,10 +712,10 @@ def test_config_reads_websocket_url(monkeypatch: Any) -> None:
 
 @pytest.mark.skipif(
     not (_HAS_WS_CLIENT and _HAS_UVICORN),
-    reason="needs websocat, ssh and uvicorn",
+    reason="needs ssh, the websockets package and uvicorn",
 )
 def test_mode1_dialout_over_websocket() -> None:
-    """End-to-end: `ssh -R` with a websocat ProxyCommand (exactly as
+    """End-to-end: `ssh -R` with the lava-ws-proxy ProxyCommand (exactly as
     lava-gateway-connect now does it) reaches the bridge served as a WebSocket route
     on a real ASGI server and registers its reverse-forward. The real product path,
     single port at /mcp/gateway-ssh, minus TLS (Caddy's job)."""
@@ -718,6 +723,8 @@ def test_mode1_dialout_over_websocket() -> None:
     import time
 
     import uvicorn
+
+    from lava_mcp.wsproxy import PROXY_SCRIPT
     from starlette.applications import Starlette
     from starlette.routing import WebSocketRoute
 
@@ -750,7 +757,15 @@ def test_mode1_dialout_over_websocket() -> None:
             time.sleep(0.05)
         assert server.started, "uvicorn did not start"
 
-        proxy = f"websocat -b ws://127.0.0.1:{app_port}/mcp/gateway-ssh"
+        proxy_file = tempfile.NamedTemporaryFile(
+            "w", suffix="-lava-ws-proxy.py", delete=False
+        )
+        proxy_file.write(PROXY_SCRIPT)
+        proxy_file.close()
+        proxy = (
+            f"{sys.executable} {proxy_file.name} "
+            f"ws://127.0.0.1:{app_port}/mcp/gateway-ssh"
+        )
         ssh = subprocess.Popen(
             [
                 "ssh",

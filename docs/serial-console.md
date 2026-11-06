@@ -53,7 +53,7 @@ Flow:
    enables writes.
 4. Poll `check_console_ready(job_id)` until `ready: true` (instead of reading logs), then
    call `attach_console(session_id)`. It returns an `ssh -W` command that tunnels to the
-   gateway over `wss://.../mcp/gateway-ssh` (via `websocat`; wrap with `socat` for a raw
+   gateway over `wss://.../mcp/gateway-ssh` (via the `lava-ws-proxy` ProxyCommand; wrap with `socat` for a raw
    PTY) — you get the live UART, bridged through the gateway on a loopback-only port.
 5. `close_console_session(session_id)` revokes access; ending the job tears down the
    proxy.
@@ -68,10 +68,10 @@ sequenceDiagram
     Human->>MCP: open_console_session() → job_environment
     Note over Human: embed in a deploy+boot job<br/>with the services block, submit
     Proxy->>Ser2net: connect to the console (read-only)
-    Proxy->>MCP: dial out ssh -R over wss (websocat, loopback reverse port)
+    Proxy->>MCP: dial out ssh -R over wss (lava-ws-proxy, loopback reverse port)
     Note over Proxy: console-ready sentinel → enable writes
     Human->>MCP: attach_console(session_id) → ssh -W command
-    Human->>MCP: ssh -W (wss via websocat, human key)
+    Human->>MCP: ssh -W (wss via lava-ws-proxy, human key)
     MCP->>Proxy: tunnel to the relay
     loop live serial console
         Human->>Ser2net: keystrokes (via gateway → proxy)

@@ -491,7 +491,7 @@ class Gateway:
 
         The key is authorised for ``gateway_human_key_ttl`` seconds only. Returns the
         private key plus the coordinates a human needs to connect (over the WebSocket
-        transport via websocat). The board/console key is never disclosed.
+        transport via the lava-ws-proxy ProxyCommand). The board/console key is never disclosed.
         """
         session = self.manager.get(session_id)
         if session is None:
@@ -504,7 +504,7 @@ class Gateway:
             "private_key": private,
             "public_key": public,
             # gateway_host is only the ssh user@host label; humans tunnel to the
-            # gateway over this wss:// URL (443) via websocat.
+            # gateway over this wss:// URL (443) via lava-ws-proxy.
             "gateway_host": advertise_host,
             "gateway_ws_url": self.config.gateway_ws_url,
             "reverse_port": session.reverse_port,

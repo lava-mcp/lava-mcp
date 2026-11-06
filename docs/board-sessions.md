@@ -19,7 +19,7 @@ Requires hosted mode with `--gateway` (or `LAVA_MCP_GATEWAY_ENABLED=true`) and
 The server runs an in-process SSH rendezvous fronted by a WebSocket bridge.
 `open_board_session` submits a LAVA job that runs a device-attached container; the
 container dials **out** (`ssh -R`, tunnelled over `wss://.../mcp/gateway-ssh` via
-`websocat`) to the gateway, so no inbound access to the worker is needed. The asyncssh
+the bundled `lava-ws-proxy` ProxyCommand) to the gateway, so no inbound access to the worker is needed. The asyncssh
 listener is loopback-only and reachable exclusively through the bridge; there is no
 direct SSH port.
 
@@ -34,7 +34,7 @@ sequenceDiagram
     Note over MCP: mint per-session ed25519 keypair,<br/>allocate reverse port, create session
     MCP->>LAVA: submit_job (interactive job,<br/>key + gateway ws url + reverse port)
     LAVA->>Board: schedule on a worker with the board,<br/>run device-attached container
-    Board->>MCP: ssh -R reverse_port:localhost:22<br/>(over wss via websocat, auth with session key)
+    Board->>MCP: ssh -R reverse_port:localhost:22<br/>(over wss via lava-ws-proxy, auth with session key)
     Note over MCP: validate key, accept reverse forward,<br/>mark session "connected"
     MCP-->>Agent: session connected
 
@@ -122,37 +122,36 @@ board that won't boot. (For the board's own console, use `attach_console`.)
 
 It mints a short-lived keypair, authorises it **both** at the gateway (for the tunnel)
 and inside the board container (appended to its `authorized_keys` over the existing
-session), and returns a private key plus a ready-to-use `ssh_config`. The config's jump
-host tunnels to the gateway over `wss://.../mcp/gateway-ssh` (via `websocat`), then
-`ProxyJump`s into the container's own sshd — the gateway forwards but offers no shell of
-its own, and the container's key is never disclosed. The `ProxyCommand` needs a
-stdio↔WebSocket relay — `websocat` on your PATH, or the bundled Python proxy (below):
+session), and returns a **`connect_script`**: a self-contained Python script that embeds
+the key and opens the shell in one step. Save it and run it:
 
 ```sh
-# save private_key to lava-shell-<id>.key (chmod 600) and ssh_config to
-# lava-shell-<id>.conf, then:
-ssh -F lava-shell-<id>.conf board-<id>
+# save the attach_shell `connect_script` to the given filename, then:
+python3 lava-connect-<id>.py        # opens the board shell
 ```
 
-### WebSocket proxy (a packaged alternative to websocat)
+The script embeds an ephemeral private key — treat it as secret and delete it when done.
+It needs only `python3`, the `websockets` package (Debian/Ubuntu: `apt install
+python3-websockets`; anywhere: `pip install websockets`), and `ssh`. Internally it dials
+the gateway over `wss://.../mcp/gateway-ssh` using itself as the `ProxyCommand` (a
+stdio↔WebSocket relay), then `ProxyJump`s into the container's own sshd — the gateway
+forwards but offers no shell of its own, and the container's key is never disclosed.
 
-`websocat` is an unpackaged static binary (not in Debian), so each client has to fetch
-it. The server also serves a dependency-light **Python** `ProxyCommand` that does the
-same stdio↔`wss://` relay, needing only `python3` and the `websockets` package — both
-actively maintained and packaged (Debian/Ubuntu: `apt install python3-websockets`;
-anywhere: `pip install websockets`).
+### The WebSocket proxy, and the manual path
 
-`attach_shell` / `attach_console` return a `ws_proxy` block with its URL, the dependency,
-and the usage. Fetch it and point ssh at it instead of websocat:
+The relay is `lava-ws-proxy` — a dependency-light Python `ProxyCommand` (this replaced
+`websocat`, an unpackaged binary). The baked copy runs inside the job containers; the
+server also serves the generic script at **`<mcp>/gateway-proxy`** for manual use. If you
+prefer raw `ssh` over the one-step `connect_script`, `attach_shell`/`attach_console` also
+return `private_key`, `ssh_config`/`ssh_W_command`, and a `ws_proxy` block (URL +
+dependency); fetch the proxy and point ssh at it:
 
 ```sh
 curl -o lava-ws-proxy https://<host>/mcp/gateway-proxy
-# then in ssh_config, replace the ProxyCommand with:
-#   ProxyCommand python3 /path/to/lava-ws-proxy wss://<host>/mcp/gateway-ssh
+ssh -F lava-shell-<id>.conf board-<id>   # ssh_config's ProxyCommand runs lava-ws-proxy
 ```
 
-It's served at `<mcp>/gateway-proxy` whenever the gateway is enabled; the single source
-is [`lava_mcp/wsproxy.py`](../lava_mcp/wsproxy.py).
+The single source for the script is [`lava_mcp/wsproxy.py`](../lava_mcp/wsproxy.py).
 
 ```mermaid
 sequenceDiagram
@@ -163,9 +162,9 @@ sequenceDiagram
     Human->>MCP: attach_shell(session_id)
     Note over MCP: mint ephemeral human key,<br/>authorise it at the gateway AND in the container
     MCP->>Board: append human key to authorized_keys<br/>(over the session)
-    MCP-->>Human: private key + ssh_config (websocat + ProxyJump)
+    MCP-->>Human: connect_script (embeds key) + ssh_config (ProxyJump)
 
-    Human->>MCP: ssh -F conf (wss via websocat, human key)
+    Human->>MCP: python3 connect_script (wss via lava-ws-proxy, human key)
     Note over MCP: human role — allow direct-tcpip to<br/>127.0.0.1:reverse_port only
     MCP->>Board: tunnel to the container sshd
     Human->>Board: authenticate as root (human key) → PTY

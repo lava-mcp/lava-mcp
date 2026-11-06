@@ -33,7 +33,7 @@ Powers [board sessions](board-sessions.md) and the [serial console](serial-conso
 | `LAVA_MCP_GATEWAY_PORT` | `--gateway-port` | `2222` | Internal loopback asyncssh port the WS bridge relays to. |
 | `LAVA_MCP_GATEWAY_ADVERTISE_HOST` | `--gateway-advertise-host` | (host) | Host label containers dial back to. |
 | `LAVA_MCP_GATEWAY_ADVERTISE_PORT` | — | (none) | Advertised port, if different. |
-| `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | (empty) | Advertised `wss://host/mcp/gateway-ssh` URL (served on the MCP app, same port as `/mcp`). **Required** for interactive sessions; clients need `websocat`. |
+| `LAVA_MCP_GATEWAY_WS_URL` | `--gateway-ws-url` | (empty) | Advertised `wss://host/mcp/gateway-ssh` URL (served on the MCP app, same port as `/mcp`). **Required** for interactive sessions; clients use the `lava-ws-proxy` ProxyCommand (python3 + the `websockets` package), fetched from the MCP. |
 | `LAVA_MCP_GATEWAY_HUMAN_KEY_TTL` | — | `3600` | Lifetime (seconds) of an ephemeral human key from `attach_*`. |
 
 ## Access control (all default to open)

@@ -29,9 +29,11 @@ from .config import Config
 from .gateway import Gateway
 from .jobs import build_downloads_action, build_interactive_job, download_label
 from .source import LavaSourceMirror
+from .wsproxy import PROXY_SCRIPT, build_connect_script
 
 # The interactive gateway is WebSocket-only: the dial-out containers and human
-# clients reach it exclusively over wss://.../gateway-ssh (via websocat). Without an
+# clients reach it exclusively over wss://.../gateway-ssh (via the lava-ws-proxy
+# ProxyCommand, served by this MCP at /mcp/gateway-proxy). Without an
 # advertised URL there is no way to connect, so the tools that hand out connect
 # details refuse rather than emit something unusable.
 _WS_NOT_CONFIGURED = (
@@ -247,15 +249,22 @@ def build_shell_ssh_config(
 ) -> str:
     """ssh config for a container shell over the WebSocket transport.
 
-    The jump host tunnels to the gateway over wss:// via websocat; ProxyJump then
-    reaches the board container's sshd on its loopback reverse port. ``ssh -F <conf>
-    board-<id>`` gives the shell.
+    The jump host tunnels to the gateway over wss:// via the ``lava-ws-proxy``
+    ProxyCommand (a python3 + ``websockets`` stdio<->wss relay fetched from this MCP —
+    see the header comment the config carries, and the ``ws_proxy`` field); ProxyJump
+    then reaches the board container's sshd on its loopback reverse port. ``ssh -F
+    <conf> board-<id>`` gives the shell.
     """
+    proxy_url = gateway_proxy_url(ws_url)
     return (
+        "# Fetch the WebSocket ProxyCommand first (needs python3 + the websockets\n"
+        "# package: apt install python3-websockets, or pip install websockets):\n"
+        f"#   curl -o lava-ws-proxy {proxy_url}\n"
+        "# then run ssh from the directory holding lava-ws-proxy.\n"
         f"Host gw-{session_id}\n"
         f"    User {session_id}\n"
         f"    IdentityFile {key_file}\n"
-        f"    ProxyCommand websocat -b {ws_url}\n"
+        f"    ProxyCommand python3 lava-ws-proxy {ws_url}\n"
         f"    StrictHostKeyChecking no\n"
         f"    UserKnownHostsFile /dev/null\n"
         f"Host board-{session_id}\n"
@@ -288,13 +297,18 @@ def gateway_proxy_url(ws_url: str) -> str:
 
 
 def ws_proxy_hint(ws_url: str) -> dict[str, str]:
-    """A small, self-describing pointer to the websocat-alternative proxy for a client."""
+    """How to fetch and use the WebSocket ProxyCommand the gateway tunnel needs.
+
+    The ssh_config / ssh_command already reference ``lava-ws-proxy``; a client just
+    fetches it from this MCP and makes python3 + ``websockets`` available.
+    """
     return {
         "url": gateway_proxy_url(ws_url),
         "requires": "python3 and the 'websockets' package "
         "(Debian/Ubuntu: apt install python3-websockets; else pip install websockets)",
-        "usage": "Alternative to websocat: `curl -o lava-ws-proxy <url>`, then use "
-        f"`ProxyCommand=python3 lava-ws-proxy {ws_url}`.",
+        "usage": "Fetch it once with `curl -o lava-ws-proxy <url>`; the ssh_config / "
+        "ssh_command already invoke it as the ProxyCommand (run ssh from the directory "
+        "you saved it in).",
     }
 
 
@@ -305,12 +319,15 @@ def build_console_ssh_command(
     reverse_port: int,
     gateway_host: str,
 ) -> str:
-    """``ssh -W`` command that tunnels to a console session over the WebSocket
-    transport (websocat ProxyCommand to the gateway, then -W to the reverse port)."""
+    """``ssh -W`` command that tunnels to a console session over the WebSocket transport.
+
+    Uses the ``lava-ws-proxy`` ProxyCommand (python3 + ``websockets``, fetched from this
+    MCP — see the ``ws_proxy`` field) to reach the gateway, then ``-W`` to the reverse
+    port. Run it from the directory holding the fetched ``lava-ws-proxy``."""
     return (
         f"ssh -i {key_file} -o StrictHostKeyChecking=no "
         f"-o UserKnownHostsFile=/dev/null "
-        f"-o 'ProxyCommand=websocat -b {ws_url}' "
+        f"-o 'ProxyCommand=python3 lava-ws-proxy {ws_url}' "
         f"-W 127.0.0.1:{reverse_port} {session_id}@{gateway_host}"
     )
 
@@ -905,13 +922,12 @@ def build_server(config: Config) -> FastMCP:
         )
 
         # Serve the dependency-light Python ProxyCommand helper next to the gateway WS,
-        # so a client can `curl <mcp>/gateway-proxy` and point ssh at it instead of
-        # installing websocat (an unpackaged binary). Needs only python3 + the
-        # `websockets` package. See lava_mcp/wsproxy.py.
+        # so a client can `curl <mcp>/gateway-proxy` and point ssh at it. This generic
+        # copy is also what the interactive/ser2net images bake in as lava-ws-proxy; the
+        # attach tools hand back a per-session variant that embeds the key. Needs only
+        # python3 + the `websockets` package. See lava_mcp/wsproxy.py.
         from starlette.responses import PlainTextResponse
         from starlette.routing import Route
-
-        from .wsproxy import PROXY_SCRIPT
 
         async def _gateway_proxy_endpoint(request: Any) -> Any:
             return PlainTextResponse(
@@ -1571,19 +1587,31 @@ def build_server(config: Config) -> FastMCP:
                 info["reverse_port"],
                 session.container_user,
             )
+            connect_script = build_connect_script(
+                kind="shell",
+                ws_url=info["gateway_ws_url"],
+                private_key=info["private_key"],
+                session_id=session_id,
+                reverse_port=info["reverse_port"],
+                container_user=session.container_user,
+            )
             return {
                 "session_id": session_id,
-                "private_key": info["private_key"],
                 "expires_in": info["expires_in"],
+                "connect_script": connect_script,
+                "connect_script_filename": f"lava-connect-{session_id}.py",
+                "note": (
+                    "EASIEST: save connect_script to the given filename and run "
+                    "`python3 <file>` — it embeds your ephemeral key (so treat the file "
+                    "as secret; delete it when done) and opens the board shell. Needs "
+                    "python3, the websockets package (apt install python3-websockets, "
+                    "or pip install websockets) and ssh. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set. ssh_config/private_key are the "
+                    "manual alternative (ProxyCommand fetched via ws_proxy)."
+                ),
+                "private_key": info["private_key"],
                 "ssh_config": config_text,
                 "ssh_command": f"ssh -F {conf_file} board-{session_id}",
-                "note": (
-                    f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
-                    "REFUSES a key file with looser permissions — then save ssh_config "
-                    f"to {conf_file} and run ssh_command for a shell. Requires "
-                    "`websocat` on your PATH (or the Python proxy in ws_proxy). Your "
-                    "source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
-                ),
                 "ws_proxy": ws_proxy_hint(info["gateway_ws_url"]),
             }
 
@@ -1657,7 +1685,7 @@ def build_server(config: Config) -> FastMCP:
             key_b64 = base64.b64encode(session.private_key.encode()).decode()
             job_environment = {
                 # GATEWAY_HOST is the ssh user@host label; the console dial-out
-                # tunnels over GATEWAY_WS_URL (wss://, 443) via websocat.
+                # tunnels over GATEWAY_WS_URL (wss://, 443) via lava-ws-proxy.
                 "GATEWAY_HOST": advertise_host,
                 "GATEWAY_WS_URL": config.gateway_ws_url,
                 "SESSION_ID": session.session_id,
@@ -1838,21 +1866,34 @@ def build_server(config: Config) -> FastMCP:
                 info["reverse_port"],
                 info["gateway_host"],
             )
+            connect_script = build_connect_script(
+                kind="console",
+                ws_url=info["gateway_ws_url"],
+                private_key=info["private_key"],
+                session_id=session_id,
+                reverse_port=info["reverse_port"],
+                gateway_host=info["gateway_host"],
+            )
             note = (
-                f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
-                "REFUSES a key file with looser permissions. Requires `websocat` on "
-                "your PATH (or the Python proxy in ws_proxy). Your source IP must be "
-                "inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                "EASIEST: save connect_script to the given filename and run "
+                "`python3 <file>` — it embeds your ephemeral key (treat the file as "
+                "secret; delete when done) and opens the serial console. Needs python3, "
+                "the websockets package (apt install python3-websockets, or pip install "
+                "websockets) and ssh. Your source IP must be inside "
+                "LAVA_MCP_GATEWAY_ALLOW_IPS if set. private_key/ssh_W_command are the "
+                "manual alternative (ProxyCommand fetched via ws_proxy)."
             )
             return {
                 "session_id": session_id,
+                "connect_script": connect_script,
+                "connect_script_filename": f"lava-console-{session_id}.py",
+                "note": note,
                 "private_key": info["private_key"],
                 "ssh_W_command": ssh,
                 "raw_console": (
                     f"# save private_key to {key_file} (chmod 600), then for a raw "
                     f"console:\nsocat -,raw,echo=0,escape=0x1d 'EXEC:{ssh},pty'"
                 ),
-                "note": note,
                 "ws_proxy": ws_proxy_hint(info["gateway_ws_url"]),
             }
 

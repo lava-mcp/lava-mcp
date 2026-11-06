@@ -60,7 +60,7 @@ def build_interactive_job(
 
     parameters = {
         # GATEWAY_HOST is only the ssh user@host label; the container tunnels its
-        # ssh -R over GATEWAY_WS_URL (wss://, 443, via Caddy) using websocat.
+        # ssh -R over GATEWAY_WS_URL (wss://, 443, via Caddy) using lava-ws-proxy.
         "GATEWAY_HOST": gateway_host,
         "GATEWAY_WS_URL": config.gateway_ws_url,
         "SESSION_ID": session.session_id,

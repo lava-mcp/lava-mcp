@@ -11,11 +11,11 @@ set -eu
 : "${SESSION_PRIVATE_KEY:?missing SESSION_PRIVATE_KEY}"
 : "${SESSION_PUBLIC_KEY:?missing SESSION_PUBLIC_KEY}"
 
-# The SSH stream tunnels over WebSocket/TLS (443, via Caddy) using websocat as an
-# ssh ProxyCommand. Held in the positional params ($@, which this script otherwise
-# ignores) so the ProxyCommand value — which contains a space — survives as a
-# single ssh argument.
-set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
+# The SSH stream tunnels over WebSocket/TLS (443, via Caddy) using lava-ws-proxy (a
+# python3 + websockets stdio<->wss relay, baked into this image) as an ssh ProxyCommand.
+# Held in the positional params ($@, which this script otherwise ignores) so the
+# ProxyCommand value — which contains spaces — survives as a single ssh argument.
+set -- -o "ProxyCommand=lava-ws-proxy ${GATEWAY_WS_URL}"
 echo "lava-mcp: transport = websocket (${GATEWAY_WS_URL})"
 
 mkdir -p /root/.ssh

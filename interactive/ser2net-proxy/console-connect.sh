@@ -29,9 +29,10 @@ printf '%s' "$SESSION_PRIVATE_KEY_B64" | base64 -d > /root/.ssh/session_key
 chmod 600 /root/.ssh/session_key
 
 # The console dial-out tunnels over the WebSocket transport (wss://.../gateway-ssh,
-# 443, via Caddy) using websocat as an ssh ProxyCommand. Held in $@ so the
-# ProxyCommand value (with its space) stays one ssh argument.
-set -- -o "ProxyCommand=websocat -b ${GATEWAY_WS_URL}"
+# 443, via Caddy) using lava-ws-proxy (a python3 + websockets stdio<->wss relay, baked
+# into this image) as an ssh ProxyCommand. Held in $@ so the ProxyCommand value (with
+# its spaces) stays one ssh argument.
+set -- -o "ProxyCommand=lava-ws-proxy ${GATEWAY_WS_URL}"
 echo "ser2net-proxy: transport = websocket (${GATEWAY_WS_URL})"
 
 echo "ser2net-proxy: dialing gateway as ${SESSION_ID}" \
