@@ -269,6 +269,35 @@ def build_shell_ssh_config(
     )
 
 
+def gateway_proxy_url(ws_url: str) -> str:
+    """The HTTP URL the Python ProxyCommand helper is served at, from the gateway WS URL.
+
+    ``wss://host/mcp/gateway-ssh`` -> ``https://host/mcp/gateway-proxy`` (and ws->http).
+    Empty in, empty out.
+    """
+    if not ws_url:
+        return ""
+    url = ws_url
+    if url.startswith("wss://"):
+        url = "https://" + url[len("wss://") :]
+    elif url.startswith("ws://"):
+        url = "http://" + url[len("ws://") :]
+    if url.endswith("/gateway-ssh"):
+        url = url[: -len("/gateway-ssh")] + "/gateway-proxy"
+    return url
+
+
+def ws_proxy_hint(ws_url: str) -> dict[str, str]:
+    """A small, self-describing pointer to the websocat-alternative proxy for a client."""
+    return {
+        "url": gateway_proxy_url(ws_url),
+        "requires": "python3 and the 'websockets' package "
+        "(Debian/Ubuntu: apt install python3-websockets; else pip install websockets)",
+        "usage": "Alternative to websocat: `curl -o lava-ws-proxy <url>`, then use "
+        f"`ProxyCommand=python3 lava-ws-proxy {ws_url}`.",
+    }
+
+
 def build_console_ssh_command(
     session_id: str,
     key_file: str,
@@ -873,6 +902,27 @@ def build_server(config: Config) -> FastMCP:
         # typed for HTTP Routes, but Starlette's router accepts WebSocketRoute too).
         mcp._custom_starlette_routes.append(
             WebSocketRoute(ws_path, _gateway_ws_endpoint)  # type: ignore[arg-type]
+        )
+
+        # Serve the dependency-light Python ProxyCommand helper next to the gateway WS,
+        # so a client can `curl <mcp>/gateway-proxy` and point ssh at it instead of
+        # installing websocat (an unpackaged binary). Needs only python3 + the
+        # `websockets` package. See lava_mcp/wsproxy.py.
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        from .wsproxy import PROXY_SCRIPT
+
+        async def _gateway_proxy_endpoint(request: Any) -> Any:
+            return PlainTextResponse(
+                PROXY_SCRIPT,
+                media_type="text/x-python; charset=utf-8",
+                headers={"Content-Disposition": 'inline; filename="lava-ws-proxy"'},
+            )
+
+        proxy_path = mcp.settings.streamable_http_path.rstrip("/") + "/gateway-proxy"
+        mcp._custom_starlette_routes.append(
+            Route(proxy_path, _gateway_proxy_endpoint, methods=["GET"])
         )
         # exposed for tests/introspection; the tools capture `gateway` via closure
         mcp._lava_gateway = gateway  # type: ignore[attr-defined]
@@ -1531,9 +1581,10 @@ def build_server(config: Config) -> FastMCP:
                     f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
                     "REFUSES a key file with looser permissions — then save ssh_config "
                     f"to {conf_file} and run ssh_command for a shell. Requires "
-                    "`websocat` on your PATH. Your source IP must be inside "
-                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
+                    "`websocat` on your PATH (or the Python proxy in ws_proxy). Your "
+                    "source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
                 ),
+                "ws_proxy": ws_proxy_hint(info["gateway_ws_url"]),
             }
 
         # -- serial console (Mode 2: ser2net proxy via LAVA Test Services) ----
@@ -1790,8 +1841,8 @@ def build_server(config: Config) -> FastMCP:
             note = (
                 f"Save private_key to {key_file} and `chmod 600 {key_file}` — ssh "
                 "REFUSES a key file with looser permissions. Requires `websocat` on "
-                "your PATH. Your source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS "
-                "if set."
+                "your PATH (or the Python proxy in ws_proxy). Your source IP must be "
+                "inside LAVA_MCP_GATEWAY_ALLOW_IPS if set."
             )
             return {
                 "session_id": session_id,
@@ -1802,6 +1853,7 @@ def build_server(config: Config) -> FastMCP:
                     f"console:\nsocat -,raw,echo=0,escape=0x1d 'EXEC:{ssh},pty'"
                 ),
                 "note": note,
+                "ws_proxy": ws_proxy_hint(info["gateway_ws_url"]),
             }
 
         @mcp.tool()

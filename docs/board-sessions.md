@@ -125,13 +125,34 @@ and inside the board container (appended to its `authorized_keys` over the exist
 session), and returns a private key plus a ready-to-use `ssh_config`. The config's jump
 host tunnels to the gateway over `wss://.../mcp/gateway-ssh` (via `websocat`), then
 `ProxyJump`s into the container's own sshd — the gateway forwards but offers no shell of
-its own, and the container's key is never disclosed. Requires `websocat` on your PATH:
+its own, and the container's key is never disclosed. The `ProxyCommand` needs a
+stdio↔WebSocket relay — `websocat` on your PATH, or the bundled Python proxy (below):
 
 ```sh
 # save private_key to lava-shell-<id>.key (chmod 600) and ssh_config to
 # lava-shell-<id>.conf, then:
 ssh -F lava-shell-<id>.conf board-<id>
 ```
+
+### WebSocket proxy (a packaged alternative to websocat)
+
+`websocat` is an unpackaged static binary (not in Debian), so each client has to fetch
+it. The server also serves a dependency-light **Python** `ProxyCommand` that does the
+same stdio↔`wss://` relay, needing only `python3` and the `websockets` package — both
+actively maintained and packaged (Debian/Ubuntu: `apt install python3-websockets`;
+anywhere: `pip install websockets`).
+
+`attach_shell` / `attach_console` return a `ws_proxy` block with its URL, the dependency,
+and the usage. Fetch it and point ssh at it instead of websocat:
+
+```sh
+curl -o lava-ws-proxy https://<host>/mcp/gateway-proxy
+# then in ssh_config, replace the ProxyCommand with:
+#   ProxyCommand python3 /path/to/lava-ws-proxy wss://<host>/mcp/gateway-ssh
+```
+
+It's served at `<mcp>/gateway-proxy` whenever the gateway is enabled; the single source
+is [`lava_mcp/wsproxy.py`](../lava_mcp/wsproxy.py).
 
 ```mermaid
 sequenceDiagram
