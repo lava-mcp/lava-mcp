@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lava-mcp"
-version = "0.9"
+version = "1.0a1"
 description = "MCP server exposing a LAVA instance to agents"
 readme = "README.md"
 requires-python = ">=3.11"

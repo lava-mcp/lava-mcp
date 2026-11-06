@@ -24,10 +24,12 @@ def _env_list(name: str) -> tuple[str, ...]:
 def server_version() -> str:
     """The running lava-mcp version (its installed package version), or '' if unknown.
 
-    A deployment runs a versioned image (e.g. ``:0.9``) whose package version matches
-    the tag, so this is what the interactive job assets pin themselves to by default —
-    the operator never repeats the version in config. Empty (e.g. an uninstalled dev
-    checkout) means "don't pin", i.e. fall back to the repo default branch / latest.
+    A deployment runs a versioned image whose tag equals the package version — a PEP 440
+    release or prerelease, e.g. ``1.0a1`` — which equals the git tag it was built from.
+    So this single string is the image tag, the package version, and the git ref the
+    interactive job assets pin themselves to, with no config to repeat. Empty (an
+    uninstalled dev checkout) means "don't pin": fall back to the repo default branch /
+    ``:latest``.
     """
     try:
         from importlib.metadata import PackageNotFoundError, version
