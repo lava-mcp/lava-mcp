@@ -53,11 +53,12 @@ These gate only the interactive features.
 Where lab workers pull the container image and fetch the test definition. Override only
 if you host them elsewhere.
 
-| Env var | Default |
-|---|---|
-| `LAVA_MCP_INTERACTIVE_IMAGE` | `ghcr.io/lava-mcp/lava-mcp/interactive:latest` |
-| `LAVA_MCP_INTERACTIVE_REPO` | `https://github.com/lava-mcp/lava-mcp.git` |
-| `LAVA_MCP_INTERACTIVE_PATH` | `interactive/ssh-gateway.yaml` |
+| Env var | Default | Meaning |
+|---|---|---|
+| `LAVA_MCP_INTERACTIVE_IMAGE` | `interactive:<server version>` | Board-session container image. Defaults to the interactive image at the **running server's version** (`:latest` only if the version is unknown, e.g. an uninstalled dev checkout). |
+| `LAVA_MCP_INTERACTIVE_REPO` | `https://github.com/lava-mcp/lava-mcp.git` | Git repo the test definition / proxy compose are fetched from. |
+| `LAVA_MCP_INTERACTIVE_PATH` | `interactive/ssh-gateway.yaml` | Board test-definition path in that repo. |
+| `LAVA_MCP_INTERACTIVE_REF` | (server version) | Git revision (tag/branch/SHA) the fetched test definition and ser2net-proxy compose are pinned to, and the ser2net-proxy image tag (injected as `SER2NET_PROXY_TAG`). **Defaults to the running server's version**, so a versioned container pins its in-job assets to itself with no config. Set empty to leave assets unpinned (repo default branch). |
 
 ## Artifact store
 

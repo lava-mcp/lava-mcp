@@ -21,6 +21,25 @@ def _env_list(name: str) -> tuple[str, ...]:
     return tuple(item for item in value.replace(",", " ").split() if item)
 
 
+def server_version() -> str:
+    """The running lava-mcp version (its installed package version), or '' if unknown.
+
+    A deployment runs a versioned image (e.g. ``:0.9``) whose package version matches
+    the tag, so this is what the interactive job assets pin themselves to by default —
+    the operator never repeats the version in config. Empty (e.g. an uninstalled dev
+    checkout) means "don't pin", i.e. fall back to the repo default branch / latest.
+    """
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            return version("lava-mcp")
+        except PackageNotFoundError:
+            return ""
+    except Exception:  # pragma: no cover - importlib is always present on 3.8+
+        return ""
+
+
 @dataclass
 class Config:
     """Connection + behaviour settings for the LAVA REST client and server.
@@ -99,6 +118,15 @@ class Config:
     interactive_image: str = "ghcr.io/lava-mcp/lava-mcp/interactive:latest"
     interactive_repo: str = "https://github.com/lava-mcp/lava-mcp.git"
     interactive_path: str = "interactive/ssh-gateway.yaml"
+    # Git revision (tag/branch/SHA) the interactive assets a job carries are pinned to,
+    # so a versioned deployment submits job content matching the running server. It is
+    # passed as the ``revision`` of each ``from: git`` fetch (the board test definition
+    # and the ser2net-proxy services compose) and injected as ``SER2NET_PROXY_TAG`` so
+    # the proxy compose pulls the matching image. ``from_env`` DEFAULTS it to the running
+    # server version (see ``server_version``) — a versioned container pins itself with no
+    # config — and ``LAVA_MCP_INTERACTIVE_REF`` overrides. Empty = unpinned (repo default
+    # branch, proxy image's own default tag), e.g. an uninstalled dev checkout.
+    interactive_ref: str = ""
     # temporary artifact store (hosted mode). Agents upload a build product here and
     # LAVA (or a job) fetches it back over the same 443/Caddy path as the gateway. The
     # external base URL is derived from gateway_ws_url unless artifact_base_url is set.
@@ -133,6 +161,19 @@ class Config:
         url = os.environ.get("LAVA_URL", "")
         gw_port = int(os.environ.get("LAVA_MCP_GATEWAY_PORT", "2222"))
         adv_port = os.environ.get("LAVA_MCP_GATEWAY_ADVERTISE_PORT")
+        # The interactive job assets pin themselves to the running server version by
+        # default, so a versioned container needs no asset config: the board/ser2net
+        # images and the git-fetched definitions all follow this one tag. Each piece is
+        # still individually overridable by its own env var.
+        ver = server_version()
+        interactive_ref = os.environ.get("LAVA_MCP_INTERACTIVE_REF")
+        if interactive_ref is None:
+            interactive_ref = ver
+        interactive_image = os.environ.get("LAVA_MCP_INTERACTIVE_IMAGE") or (
+            f"ghcr.io/lava-mcp/lava-mcp/interactive:{ver}"
+            if ver
+            else "ghcr.io/lava-mcp/lava-mcp/interactive:latest"
+        )
         return cls(
             url=url,
             token=os.environ.get("LAVA_TOKEN"),
@@ -164,10 +205,7 @@ class Config:
             gateway_human_key_ttl=float(
                 os.environ.get("LAVA_MCP_GATEWAY_HUMAN_KEY_TTL", "3600")
             ),
-            interactive_image=os.environ.get(
-                "LAVA_MCP_INTERACTIVE_IMAGE",
-                "ghcr.io/lava-mcp/lava-mcp/interactive:latest",
-            ),
+            interactive_image=interactive_image,
             interactive_repo=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_REPO",
                 "https://github.com/lava-mcp/lava-mcp.git",
@@ -175,6 +213,7 @@ class Config:
             interactive_path=os.environ.get(
                 "LAVA_MCP_INTERACTIVE_PATH", "interactive/ssh-gateway.yaml"
             ),
+            interactive_ref=interactive_ref,
             artifacts_enabled=_env_bool("LAVA_MCP_ARTIFACTS_ENABLED"),
             artifact_dir=os.environ.get("LAVA_MCP_ARTIFACT_DIR", ""),
             artifact_base_url=os.environ.get("LAVA_MCP_ARTIFACT_BASE_URL", ""),

@@ -137,6 +137,68 @@ def test_build_interactive_job_with_console_adds_proxy_but_no_ser2net_endpoint()
     assert "SESSION_PRIVATE_KEY_B64" in env
 
 
+def test_build_interactive_job_pins_revision_and_proxy_tag_when_ref_set() -> None:
+    cfg = Config(
+        url="https://lava.example.com",
+        gateway_advertise_host="gw.example.com",
+        gateway_ws_url="wss://gw.example.com/gateway-ssh",
+        interactive_ref="0.9",
+    )
+    mgr = SessionManager()
+    session = mgr.create(device_type="qcs6490")
+    console = mgr.create(device_type="qcs6490", kind="console")
+    job = yaml.safe_load(
+        build_interactive_job(
+            cfg, session, device_type="qcs6490", console_session=console
+        )
+    )
+    # board test definition pinned to the deployment version
+    board = next(a["test"] for a in job["actions"] if a["test"].get("namespace") == "board")
+    assert board["definitions"][0]["revision"] == "0.9"
+    # ser2net-proxy services compose pinned too
+    console_action = next(
+        a["test"] for a in job["actions"] if a["test"].get("namespace") == "console"
+    )
+    assert console_action["services"][0]["revision"] == "0.9"
+    # and the proxy image tag is injected so the compose pulls the matching image
+    assert job["environment"]["SER2NET_PROXY_TAG"] == "0.9"
+
+
+def test_build_interactive_job_no_revision_when_ref_unset() -> None:
+    cfg = Config(url="https://lava.example.com")  # interactive_ref defaults to ""
+    session = SessionManager().create(device_type="qcs6490")
+    job = yaml.safe_load(build_interactive_job(cfg, session, device_type="qcs6490"))
+    # unpinned: no revision key, so LAVA fetches the repo's default branch
+    assert "revision" not in job["actions"][0]["test"]["definitions"][0]
+
+
+def test_from_env_pins_interactive_assets_to_server_version(monkeypatch) -> None:
+    # A versioned container pins its interactive assets to its own version, with no
+    # asset config in the environment.
+    import lava_mcp.config as config_mod
+
+    monkeypatch.setattr(config_mod, "server_version", lambda: "0.9")
+    for var in ("LAVA_MCP_INTERACTIVE_REF", "LAVA_MCP_INTERACTIVE_IMAGE"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = Config.from_env()
+    assert cfg.interactive_ref == "0.9"
+    assert cfg.interactive_image == "ghcr.io/lava-mcp/lava-mcp/interactive:0.9"
+    # explicit env still overrides the derived default
+    monkeypatch.setenv("LAVA_MCP_INTERACTIVE_REF", "edge")
+    assert Config.from_env().interactive_ref == "edge"
+
+
+def test_from_env_unpinned_when_version_unknown(monkeypatch) -> None:
+    import lava_mcp.config as config_mod
+
+    monkeypatch.setattr(config_mod, "server_version", lambda: "")
+    for var in ("LAVA_MCP_INTERACTIVE_REF", "LAVA_MCP_INTERACTIVE_IMAGE"):
+        monkeypatch.delenv(var, raising=False)
+    cfg = Config.from_env()
+    assert cfg.interactive_ref == ""  # unpinned (dev checkout)
+    assert cfg.interactive_image.endswith("/interactive:latest")
+
+
 def test_download_label_and_action() -> None:
     assert download_label("https://h/x/boot.img.gz") == "boot.img.gz"
     assert download_label("https://h/x/f.bin?sig=abc") == "f.bin"

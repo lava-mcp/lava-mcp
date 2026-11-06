@@ -75,6 +75,17 @@ def build_interactive_job(
     if config.remote_access_tag and config.remote_access_tag not in job_tags:
         job_tags.append(config.remote_access_tag)
 
+    board_definition: dict[str, Any] = {
+        "repository": config.interactive_repo,
+        "from": "git",
+        "path": config.interactive_path,
+        "name": "interactive-ssh-gateway",
+        "parameters": parameters,
+    }
+    # Pin the fetched test definition to the deployment's version when configured, so a
+    # versioned server never runs a mismatched (e.g. master) definition against itself.
+    if config.interactive_ref:
+        board_definition["revision"] = config.interactive_ref
     board_action = {
         "test": {
             "timeout": {"minutes": timeout_minutes},
@@ -83,15 +94,7 @@ def build_interactive_job(
             # hard_reset, recovery_*, user_commands) on the worker via the DEVICECMD
             # relay — e.g. power-cycling the DUT for flashing/EDL.
             "device_commands": True,
-            "definitions": [
-                {
-                    "repository": config.interactive_repo,
-                    "from": "git",
-                    "path": config.interactive_path,
-                    "name": "interactive-ssh-gateway",
-                    "parameters": parameters,
-                }
-            ],
+            "definitions": [board_definition],
         }
     }
     job: dict[str, Any] = {
@@ -124,19 +127,20 @@ def build_interactive_job(
     if console_present:
         assert console_session is not None  # implied by console_present; narrows type
         # start the console proxy first, so it watches from the start of the job
+        proxy_service: dict[str, Any] = {
+            "name": "ser2net-proxy",
+            "from": "git",
+            "repository": config.interactive_repo,
+            "path": "interactive/ser2net-proxy/docker-compose.yml",
+        }
+        if config.interactive_ref:
+            proxy_service["revision"] = config.interactive_ref
         actions.append(
             {
                 "test": {
                     "namespace": "console",
                     "timeout": {"minutes": timeout_minutes},
-                    "services": [
-                        {
-                            "name": "ser2net-proxy",
-                            "from": "git",
-                            "repository": config.interactive_repo,
-                            "path": "interactive/ser2net-proxy/docker-compose.yml",
-                        }
-                    ],
+                    "services": [proxy_service],
                 }
             }
         )
@@ -154,6 +158,10 @@ def build_interactive_job(
             "REVERSE_PORT": str(console_session.reverse_port),
             "SESSION_PRIVATE_KEY_B64": key_b64,
         }
+        # Pin the proxy image to the deployment's version too: LAVA appends this to the
+        # service compose's .env, where `${SER2NET_PROXY_TAG}` selects the image tag.
+        if config.interactive_ref:
+            job["environment"]["SER2NET_PROXY_TAG"] = config.interactive_ref
 
     if downloads:
         # Pre-stage artifacts LAVA fetches (applying the header / substituting a
