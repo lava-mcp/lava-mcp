@@ -137,21 +137,35 @@ the gateway over `wss://.../mcp/gateway-ssh` using itself as the `ProxyCommand` 
 stdio↔WebSocket relay), then `ProxyJump`s into the container's own sshd — the gateway
 forwards but offers no shell of its own, and the container's key is never disclosed.
 
-### The WebSocket proxy, and the manual path
+### Two ways to connect, and the websocat drop-in
 
-The relay is `lava-ws-proxy` — a dependency-light Python `ProxyCommand` (this replaced
-`websocat`, an unpackaged binary). The baked copy runs inside the job containers; the
-server also serves the generic script at **`<mcp>/gateway-proxy`** for manual use. If you
-prefer raw `ssh` over the one-step `connect_script`, `attach_shell`/`attach_console` also
-return `private_key`, `ssh_config`/`ssh_W_command`, and a `ws_proxy` block (URL +
-dependency); fetch the proxy and point ssh at it:
+`attach_shell`/`attach_console` support two connection styles, and the tool reply spells
+out both so an agent can pick:
+
+- **(A) One-step script — `connect_script`.** Easiest, and the default for an agent that
+  just wants a shell/console. It embeds the ephemeral key *and* the stdio↔wss relay (it
+  is its own `ProxyCommand`), so `python3 <file>` connects in one step with nothing else
+  to fetch. Use this unless you already drive `ssh` yourself.
+- **(B) websocat-style `ProxyCommand` — `lava-ws-proxy`.** For an agent that already has
+  an `ssh` pipeline (its own `ssh` invocation, a `socat` wrapper, or a script that used
+  `ProxyCommand=websocat`). `lava-ws-proxy` is a **drop-in replacement for websocat** — a
+  dependency-light Python relay you use exactly where websocat went:
+  `python3 lava-ws-proxy <wss-url>` in place of `websocat -b <wss-url>` (same final URL
+  argument, same role). Fetch it from the `ws_proxy` block's URL and pair it with the
+  returned `private_key` + `ssh_config`/`ssh_W_command`, which already name it as the
+  `ProxyCommand`:
 
 ```sh
 curl -o lava-ws-proxy https://<host>/mcp/gateway-proxy
 ssh -F lava-shell-<id>.conf board-<id>   # ssh_config's ProxyCommand runs lava-ws-proxy
 ```
 
-The single source for the script is [`lava_mcp/wsproxy.py`](../lava_mcp/wsproxy.py).
+Both styles need only `python3`, the `websockets` package (Debian/Ubuntu: `apt install
+python3-websockets`; anywhere: `pip install websockets`), and `ssh`. (A) carries the key
+inside the script; (B) uses the returned `private_key`. The baked `lava-ws-proxy` copy
+runs inside the job containers; the server serves the generic script at
+**`<mcp>/gateway-proxy`**. The single source for the script is
+[`lava_mcp/wsproxy.py`](../lava_mcp/wsproxy.py).
 
 ```mermaid
 sequenceDiagram

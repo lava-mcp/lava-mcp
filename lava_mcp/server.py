@@ -297,13 +297,20 @@ def gateway_proxy_url(ws_url: str) -> str:
 
 
 def ws_proxy_hint(ws_url: str) -> dict[str, str]:
-    """How to fetch and use the WebSocket ProxyCommand the gateway tunnel needs.
+    """How to fetch and use lava-ws-proxy: the drop-in websocat replacement.
 
-    The ssh_config / ssh_command already reference ``lava-ws-proxy``; a client just
-    fetches it from this MCP and makes python3 + ``websockets`` available.
+    ``lava-ws-proxy`` is a dependency-light python3 ProxyCommand (a stdio<->wss relay)
+    that stands in for websocat one-for-one: anywhere ssh used
+    ``ProxyCommand=websocat -b <wss-url>`` it now uses
+    ``ProxyCommand=python3 lava-ws-proxy <wss-url>``. The returned ssh_config /
+    ssh_command already do this; a client just fetches the script from this MCP and
+    makes python3 + the ``websockets`` package available.
     """
     return {
         "url": gateway_proxy_url(ws_url),
+        "replaces": "websocat, as a drop-in: use `python3 lava-ws-proxy <wss-url>` as "
+        "the ssh ProxyCommand exactly where you used `websocat -b <wss-url>` — same "
+        "final URL argument, same role.",
         "requires": "python3 and the 'websockets' package "
         "(Debian/Ubuntu: apt install python3-websockets; else pip install websockets)",
         "usage": "Fetch it once with `curl -o lava-ws-proxy <url>`; the ssh_config / "
@@ -1601,13 +1608,24 @@ def build_server(config: Config) -> FastMCP:
                 "connect_script": connect_script,
                 "connect_script_filename": f"lava-connect-{session_id}.py",
                 "note": (
-                    "EASIEST: save connect_script to the given filename and run "
-                    "`python3 <file>` — it embeds your ephemeral key (so treat the file "
-                    "as secret; delete it when done) and opens the board shell. Needs "
-                    "python3, the websockets package (apt install python3-websockets, "
-                    "or pip install websockets) and ssh. Your source IP must be inside "
-                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set. ssh_config/private_key are the "
-                    "manual alternative (ProxyCommand fetched via ws_proxy)."
+                    "TWO WAYS to connect — pick one.\n"
+                    "(A) ONE-STEP SCRIPT (easiest; use this unless you already drive "
+                    "ssh yourself): save connect_script to connect_script_filename and "
+                    "run `python3 <file>`. It embeds your ephemeral key AND the wss "
+                    "relay (it is its own ProxyCommand) and opens the board shell in one "
+                    "step — nothing else to fetch. Treat the file as secret (it holds "
+                    "the key); delete it when done.\n"
+                    "(B) websocat-style ProxyCommand (for an existing ssh pipeline, e.g. "
+                    "your own ssh invocation or a script that used `ProxyCommand="
+                    "websocat`): fetch lava-ws-proxy from ws_proxy.url — it is a DROP-IN "
+                    "replacement for websocat (`python3 lava-ws-proxy <wss-url>` where "
+                    "you had `websocat -b <wss-url>`). Then use ssh_config + private_key "
+                    "(`ssh -F <conf> board-<id>`); the ProxyCommand is already wired to "
+                    "lava-ws-proxy.\n"
+                    "BOTH need python3, the websockets package (apt install "
+                    "python3-websockets, or pip install websockets) and ssh. (A) embeds "
+                    "the key; (B) uses private_key. Your source IP must be inside "
+                    "LAVA_MCP_GATEWAY_ALLOW_IPS if set."
                 ),
                 "private_key": info["private_key"],
                 "ssh_config": config_text,
@@ -1875,13 +1893,26 @@ def build_server(config: Config) -> FastMCP:
                 gateway_host=info["gateway_host"],
             )
             note = (
-                "EASIEST: save connect_script to the given filename and run "
-                "`python3 <file>` — it embeds your ephemeral key (treat the file as "
-                "secret; delete when done) and opens the serial console. Needs python3, "
-                "the websockets package (apt install python3-websockets, or pip install "
-                "websockets) and ssh. Your source IP must be inside "
-                "LAVA_MCP_GATEWAY_ALLOW_IPS if set. private_key/ssh_W_command are the "
-                "manual alternative (ProxyCommand fetched via ws_proxy)."
+                "TWO WAYS to attach — pick one.\n"
+                "(A) ONE-STEP SCRIPT (easiest; use this unless you already drive ssh "
+                "yourself): save connect_script to connect_script_filename and run "
+                "`python3 <file>`. It embeds your ephemeral key AND the wss relay (it is "
+                "its own ProxyCommand) and opens the serial console — nothing else to "
+                "fetch. For a raw tty wrap it: `socat -,raw,echo=0,escape=0x1d "
+                "'EXEC:python3 <file>,pty'`. Treat the file as secret; delete when "
+                "done.\n"
+                "(B) websocat-style ProxyCommand (for an existing ssh pipeline, e.g. "
+                "wrapping ssh under socat yourself, or a script that used `ProxyCommand="
+                "websocat`): fetch lava-ws-proxy from ws_proxy.url — it is a DROP-IN "
+                "replacement for websocat (`python3 lava-ws-proxy <wss-url>` where you "
+                "had `websocat -b <wss-url>`). Then run ssh_W_command (or the raw_console "
+                "socat wrapper) with private_key saved chmod 600; its ProxyCommand "
+                "already invokes lava-ws-proxy.\n"
+                "BOTH need python3, the websockets package (apt install "
+                "python3-websockets, or pip install websockets) and ssh. (A) embeds the "
+                "key; (B) uses private_key. Console is read-only until the job emits "
+                "console-ready; source IP must be inside LAVA_MCP_GATEWAY_ALLOW_IPS if "
+                "set."
             )
             return {
                 "session_id": session_id,

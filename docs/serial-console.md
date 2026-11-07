@@ -52,9 +52,13 @@ Flow:
    console-ready test echoes the sentinel (`LAVA_MCP_CONSOLE_WRITABLE`), the proxy
    enables writes.
 4. Poll `check_console_ready(job_id)` until `ready: true` (instead of reading logs), then
-   call `attach_console(session_id)`. It returns an `ssh -W` command that tunnels to the
-   gateway over `wss://.../mcp/gateway-ssh` (via the `lava-ws-proxy` ProxyCommand; wrap with `socat` for a raw
-   PTY) — you get the live UART, bridged through the gateway on a loopback-only port.
+   call `attach_console(session_id)`. It offers **two ways** to attach (the reply explains
+   both): (A) a one-step `connect_script` — `python3 <file>` opens the console, wrap with
+   `socat` for a raw PTY; or (B) a websocat-style path — `ssh_W_command` + `private_key`
+   using the `lava-ws-proxy` `ProxyCommand` (a drop-in for `websocat`, fetched from the
+   `ws_proxy` URL). Either tunnels to the gateway over `wss://.../mcp/gateway-ssh` — you
+   get the live UART, bridged through the gateway on a loopback-only port. See
+   [board-sessions.md](board-sessions.md#two-ways-to-connect-and-the-websocat-drop-in).
 5. `close_console_session(session_id)` revokes access; ending the job tears down the
    proxy.
 
