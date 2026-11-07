@@ -30,7 +30,7 @@ def client_from(cfg: Config, headers: Mapping[str, str] | None = None) -> "LavaC
     header_url = headers.get("x-lava-url") if headers else None
     header_token = headers.get("x-lava-token") if headers else None
     url = cfg.url or header_url
-    token = header_token or cfg.token
+    token = header_token or (cfg.token if cfg.transport == "stdio" else None)
     if not url:
         raise LavaError(
             "No LAVA URL: set LAVA_URL on the server to pin it to a LAVA "

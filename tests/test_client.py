@@ -70,6 +70,19 @@ def test_client_from_falls_back_to_config() -> None:
     assert c.base.startswith("https://default.example.com/api/")
 
 
+@pytest.mark.parametrize("headers", [None, {}, {"x-lava-url": "https://x.example"}])
+def test_client_from_never_uses_server_token_over_http(
+    headers: dict[str, str] | None,
+) -> None:
+    # Over HTTP a client without X-Lava-Token must be anonymous, not act as the
+    # server's configured LAVA user.
+    cfg = Config(
+        url="https://pinned.example.com", token="deftok", transport="streamable-http"
+    )
+    c = client_from(cfg, headers)
+    assert "Authorization" not in c.session.headers
+
+
 def test_client_from_requires_a_url() -> None:
     with pytest.raises(LavaError):
         client_from(Config(url=""), {})

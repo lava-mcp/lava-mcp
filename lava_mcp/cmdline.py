@@ -148,6 +148,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             "(HTTP mode takes per-client X-Lava-Url/X-Lava-Token headers)"
         )
 
+    if config.transport != "stdio" and config.token:
+        parser.error(
+            "a server-side LAVA token (--token or $LAVA_TOKEN) is not allowed "
+            "in HTTP mode: each client authenticates with its own X-Lava-Token"
+        )
+
     server = build_server(config)
     server.run(transport=cast(Literal["stdio", "streamable-http"], config.transport))
     return 0

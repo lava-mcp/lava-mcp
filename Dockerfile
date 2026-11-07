@@ -1,7 +1,7 @@
 # Hostable lava-mcp service (streamable-HTTP transport).
 # Build:  docker build -t lava-mcp .
 # Run:    docker run -p 8000:8000 \
-#           -e LAVA_URL=https://lava.example.com -e LAVA_TOKEN=... \
+#           -e LAVA_URL=https://lava.example.com \
 #           -e LAVA_MCP_TRANSPORT=streamable-http -e LAVA_MCP_HOST=0.0.0.0 \
 #           lava-mcp
 FROM python:3.13-slim
