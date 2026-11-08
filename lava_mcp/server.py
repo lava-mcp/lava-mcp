@@ -803,7 +803,8 @@ def _register_artifact_routes(
 
     def _server_client() -> LavaClient | None:
         # For best-effort job-binding checks only; works when the server is pinned to
-        # a LAVA instance with a token. Multi-tenant (no server creds) skips the check.
+        # a LAVA instance. Over HTTP it is anonymous, so a job the anonymous user
+        # can't see is not checked. Multi-tenant (no LAVA_URL) skips the check.
         try:
             return client_from(config, None)
         except LavaError:
