@@ -187,11 +187,28 @@ def test_submit_job(client: LavaClient) -> None:
 
 
 @responses.activate
-def test_cancel_job_uses_get(client: LavaClient) -> None:
-    # LAVA's cancel action is a GET; a POST returns HTTP 405.
+def test_cancel_job_uses_post(client: LavaClient) -> None:
+    # Current LAVA's cancel action is POST-only.
+    responses.post(BASE + "jobs/7/cancel/", json={"message": "Job cancel signal sent."})
+    assert "cancel" in client.cancel_job(7)["message"].lower()
+    assert [c.request.method for c in responses.calls] == ["POST"]
+
+
+@responses.activate
+def test_cancel_job_falls_back_to_get_on_405(client: LavaClient) -> None:
+    # Older LAVA exposed cancel as GET-only and answers a POST with 405.
+    responses.post(BASE + "jobs/7/cancel/", status=405)
     responses.get(BASE + "jobs/7/cancel/", json={"message": "Job cancel signal sent."})
     assert "cancel" in client.cancel_job(7)["message"].lower()
-    assert responses.calls[0].request.method == "GET"
+    assert [c.request.method for c in responses.calls] == ["POST", "GET"]
+
+
+@responses.activate
+def test_cancel_job_does_not_retry_other_errors(client: LavaClient) -> None:
+    responses.post(BASE + "jobs/7/cancel/", status=404)
+    with pytest.raises(LavaError):
+        client.cancel_job(7)
+    assert len(responses.calls) == 1
 
 
 @responses.activate
