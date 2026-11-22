@@ -1170,12 +1170,16 @@ def build_server(config: Config) -> FastMCP:
         {"branch__startswith": "release/"}, {"source__icontains": "linux"}. Default
         lookup is exact. This is the way to FIND jobs by what they built/tested (e.g. a
         boot template for a specific branch or build) rather than scanning definitions.
+
+        submitter is a LAVA username, e.g. the user whoami returns.
         """
         return client().list_jobs(
             limit=limit,
             state=state,
             health=health,
-            submitter=submitter,
+            # LAVA's submitter filter is a related filter on User, so a bare
+            # value is matched against the user id; match the name instead.
+            submitter__username=submitter,
             requested_device_type=device_type,
             **_metadata_filters(metadata),
         )

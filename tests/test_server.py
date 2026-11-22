@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import responses
 
 from lava_mcp.config import Config
 from lava_mcp.server import (
@@ -501,3 +502,18 @@ def test_find_boot_template_registered() -> None:
     server = build_server(Config(url="https://x"))
     names = {t.name for t in _asyncio.run(server.list_tools())}
     assert "find_boot_template" in names
+
+
+@responses.activate
+def test_list_jobs_filters_submitter_by_username() -> None:
+    # LAVA matches a bare submitter= against the user id (HTTP 400 for a
+    # name), so the tool must send submitter__username.
+    responses.get(
+        "https://lava.example/api/v0.3/jobs/",
+        json={"count": 0, "next": None, "results": []},
+    )
+    server = build_server(Config(url="https://lava.example", token="t"))
+    asyncio.run(server.call_tool("list_jobs", {"submitter": "alice"}))
+    params = responses.calls[0].request.params
+    assert params["submitter__username"] == "alice"
+    assert "submitter" not in params
