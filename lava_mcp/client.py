@@ -195,10 +195,12 @@ class LavaClient:
 
     # -- jobs --------------------------------------------------------------
     def list_jobs(self, limit: int = 25, **filters: Any) -> dict[str, Any]:
-        return self._list("jobs/", limit, **filters)
+        page = self._list("jobs/", limit, **filters)
+        page["results"] = [_without_job_token(job) for job in page["results"]]
+        return page
 
     def get_job(self, job_id: int | str) -> Any:
-        return self._get_json(f"jobs/{job_id}/")
+        return _without_job_token(self._get_json(f"jobs/{job_id}/"))
 
     def get_job_definition(self, job_id: int | str) -> str:
         job = self.get_job(job_id)
@@ -291,6 +293,17 @@ def _clean(params: dict[str, Any] | None) -> dict[str, Any] | None:
     if not params:
         return None
     return {k: v for k, v in params.items() if v is not None}
+
+
+def _without_job_token(job: Any) -> Any:
+    """Drop the job's dispatcher ``token`` from a TestJob record.
+
+    LAVA includes it for superusers only. lava-mcp never needs it, and it
+    is a credential for that job, so keep it out of what agents see.
+    """
+    if isinstance(job, dict):
+        job.pop("token", None)
+    return job
 
 
 def _maybe_json(resp: requests.Response) -> Any:
