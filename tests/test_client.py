@@ -267,3 +267,15 @@ actions:
     assert info["supports_qdl"] is True
     assert info["deploy_methods"] == ["fastboot", "qdl"]
     assert responses.calls[0].request.params == {"render": "true"}
+
+
+@responses.activate
+def test_job_records_drop_token(client: LavaClient) -> None:
+    # LAVA returns the job token to superusers; it must not reach agents.
+    job = {"id": 7, "state": "Finished", "token": "secret"}
+    responses.get(BASE + "jobs/", json={"count": 1, "next": None, "results": [job]})
+    responses.get(BASE + "jobs/7/", json=job)
+    listed = client.list_jobs()["results"][0]
+    assert "token" not in listed and listed["id"] == 7
+    fetched = client.get_job(7)
+    assert "token" not in fetched and fetched["state"] == "Finished"
