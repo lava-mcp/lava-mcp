@@ -16,6 +16,10 @@ from .config import Config
 class LavaError(RuntimeError):
     """Raised when a LAVA REST call fails."""
 
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
 
 def client_from(cfg: Config, headers: Mapping[str, str] | None = None) -> "LavaClient":
     """Build a LavaClient for one request.
@@ -76,7 +80,8 @@ class LavaClient:
             raise LavaError(f"request to {url} failed: {exc}") from exc
         if resp.status_code >= 400:
             raise LavaError(
-                f"{method} {url} -> HTTP {resp.status_code}: {resp.text[:500]}"
+                f"{method} {url} -> HTTP {resp.status_code}: {resp.text[:500]}",
+                status=resp.status_code,
             )
         return resp
 
@@ -234,8 +239,16 @@ class LavaClient:
         return self._request("POST", "jobs/", json={"definition": definition}).json()
 
     def cancel_job(self, job_id: int | str) -> Any:
-        # LAVA's jobs/<id>/cancel/ action is a GET (no request body).
-        return _maybe_json(self._request("GET", f"jobs/{job_id}/cancel/"))
+        # Current LAVA registers jobs/<id>/cancel/ as POST-only; older
+        # releases exposed it as GET-only. Try POST and fall back to GET
+        # on 405 so either kind of instance can be cancelled.
+        path = f"jobs/{job_id}/cancel/"
+        try:
+            return _maybe_json(self._request("POST", path))
+        except LavaError as exc:
+            if exc.status != 405:
+                raise
+        return _maybe_json(self._request("GET", path))
 
     def resubmit_job(self, job_id: int | str) -> Any:
         return _maybe_json(self._request("POST", f"jobs/{job_id}/resubmit/"))
