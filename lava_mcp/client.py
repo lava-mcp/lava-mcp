@@ -191,7 +191,9 @@ class LavaClient:
         return self._list("devicetypes/", limit, **filters)
 
     def list_workers(self, limit: int = 100) -> dict[str, Any]:
-        return self._list("workers/", limit)
+        page = self._list("workers/", limit)
+        page["results"] = [_without_worker_token(w) for w in page["results"]]
+        return page
 
     # -- jobs --------------------------------------------------------------
     def list_jobs(self, limit: int = 25, **filters: Any) -> dict[str, Any]:
@@ -285,6 +287,18 @@ def device_dict_allows_test_services(dict_text: str) -> bool:
         return False
     params = data.get("parameters") or {}
     return isinstance(params, dict) and params.get("allow_test_services") is True
+
+
+def _without_worker_token(worker: Any) -> Any:
+    """Drop the worker's ``token`` from a Worker record.
+
+    LAVA includes it for superusers only. It is the credential the worker
+    uses to talk to the server, and lava-mcp never needs it, so keep it
+    out of what agents see.
+    """
+    if isinstance(worker, dict):
+        worker.pop("token", None)
+    return worker
 
 
 def _clean(params: dict[str, Any] | None) -> dict[str, Any] | None:

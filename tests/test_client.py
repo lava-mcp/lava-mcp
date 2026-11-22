@@ -148,6 +148,17 @@ def test_list_jobs_forwards_metadata_filters(client: LavaClient) -> None:
 
 
 @responses.activate
+def test_list_workers_drops_token(client: LavaClient) -> None:
+    # LAVA returns each worker's token to superusers; it must not reach agents.
+    worker = {"hostname": "w1", "state": "Online", "token": "secret"}
+    responses.get(
+        BASE + "workers/", json={"count": 1, "next": None, "results": [worker]}
+    )
+    listed = client.list_workers()["results"][0]
+    assert "token" not in listed and listed["hostname"] == "w1"
+
+
+@responses.activate
 def test_list_remote_artifact_tokens(client: LavaClient) -> None:
     responses.get(
         BASE + "remote-artifact-tokens/",
